@@ -1,0 +1,12 @@
+.{
+    .name = .uzip,
+    .version = "0.1.0",
+    .dependencies = .{},
+    .fingerprint = 0xc0f9c3e62bb95244,
+    .paths = .{
+        "readme.md",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
