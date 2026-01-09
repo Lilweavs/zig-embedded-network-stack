@@ -10,12 +10,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // run tests
-    const tests = b.addTest(.{
+    const test_module = b.createModule(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
-        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple }, // add this line
+    });
+
+    // run tests
+    const tests = b.addTest(.{
+        .root_module = test_module,
+        // .target = target,
+        // .optimize = optimize,
+        // .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple }, // add this line
     });
     // tests.linkLibC();
     // const force_blocking = b.option(bool, "force_blocking", "Force blocking mode") orelse false;

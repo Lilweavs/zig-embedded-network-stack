@@ -56,11 +56,11 @@ pub fn returnSocketToPool(socket: *UDPSocket) void {
     socket.active = false;
 }
 
-pub const UDPHeader = extern struct {
-    sport: u16 align(1) = 0x0000,
-    dport: u16 align(1) = 0x0000,
-    length: u16 align(1) = 0x0000,
-    checksum: u16 align(1) = 0x0000,
+pub const UDPHeader = packed struct(u64) {
+    sport: u16 = 0x0000,
+    dport: u16 = 0x0000,
+    length: u16 = 0x0000,
+    checksum: u16 = 0x0000,
 };
 
 pub fn createUDPHeader(sport: u16, dport: u16, length: u16, checksum: u16) UDPHeader {
@@ -107,25 +107,39 @@ pub const UDPSocket = struct {
     // offset by 34B
 
     pub fn send(self: *Self, dip_addr: u32, port: u16, payload: []const u8) !void {
-        if (hal.requestBuffer()) |buffer| {
-            const header = createUDPHeader(self.port, port, @intCast(payload.len + 8), 0x0000);
+        if (eth.requestSlot()) |slot| {
+            const checksum = ipv4.calcPseudoChecksum(payload, .UDP, ipv4.ip_addr, ipv4.dip_addr);
 
-            var pos: usize = 34;
-            var end: usize = pos + @sizeOf(UDPHeader);
-            @memcpy(buffer[pos..end], std.mem.asBytes(&header));
+            const header = createUDPHeader(self.port, port, @intCast(payload.len + 8), checksum);
 
-            pos = end;
-            end = pos + payload.len;
-            @memcpy(buffer[pos..end], payload);
-
-            const checksum = calcUdpChecksum(buffer[34..end], ipv4.ip_addr, dip_addr);
-
-            pos = @offsetOf(UDPHeader, "checksum");
-            @memcpy(buffer[pos .. pos + @sizeOf(@FieldType(UDPHeader, "checksum"))], std.mem.asBytes(&checksum));
+            const pos: usize = 34;
+            const end: usize = pos + @sizeOf(UDPHeader);
+            @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
 
             // now send IPv4 Packet
-            ipv4.send(dip_addr, buffer[34..end], .{ .buffer = buffer, .proto = ipv4.Protocol.UDP }) catch {};
+            // ipv4.send(dip_addr, buffer[34..end], .{ .buffer = buffer, .proto = ipv4.Protocol.UDP }) catch {};
+            ipv4.send(dip_addr, slot);
         }
+
+        // if (hal.requestBuffer()) |buffer| {
+        //     const header = createUDPHeader(self.port, port, @intCast(payload.len + 8), 0x0000);
+
+        //     var pos: usize = 34;
+        //     var end: usize = pos + @sizeOf(UDPHeader);
+        //     @memcpy(buffer[pos..end], std.mem.asBytes(&header));
+
+        //     pos = end;
+        //     end = pos + payload.len;
+        //     @memcpy(buffer[pos..end], payload);
+
+        //     const checksum = calcUdpChecksum(buffer[34..end], ipv4.ip_addr, dip_addr);
+
+        //     pos = @offsetOf(UDPHeader, "checksum");
+        //     @memcpy(buffer[pos .. pos + @sizeOf(@FieldType(UDPHeader, "checksum"))], std.mem.asBytes(&checksum));
+
+        //     // now send IPv4 Packet
+        //     ipv4.send(dip_addr, buffer[34..end], .{ .buffer = buffer, .proto = ipv4.Protocol.UDP }) catch {};
+        // }
     }
 
     pub fn send_broadcast(self: *Self, port: u16, payload: []const u8) !void {

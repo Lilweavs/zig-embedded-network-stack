@@ -108,11 +108,12 @@ pub const IPv4Header = extern struct {
 };
 
 // 576 - 20 - 8 - 14 : 534
-pub fn send(dip_addr: u32, payload: []u8, ctx: Context) !void {
+pub fn send(dip_addr: u32, slot: *eth.Node, proto: Protocol) !void {
+    const len: u32 = slot.data.len + 8;
     const header: IPv4Header = .{
-        .length = std.mem.nativeToBig(u16, @intCast(@sizeOf(IPv4Header) + payload.len)),
+        .length = std.mem.nativeToBig(u16, @intCast(@sizeOf(IPv4Header) + len)),
         .ttl = 255,
-        .protocol = @as(u8, @intFromEnum(ctx.proto)),
+        .protocol = @as(u8, @intFromEnum(proto)),
         .saddr = ip_addr,
         .daddr = dip_addr,
     };
@@ -121,21 +122,51 @@ pub fn send(dip_addr: u32, payload: []u8, ctx: Context) !void {
 
     const pos: usize = 14;
     const end: usize = 14 + @sizeOf(IPv4Header);
-    @memcpy(ctx.buffer[pos..end], std.mem.asBytes(&header));
+
+    @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
 
     // var dmac_addr = try resolveMacAddress(dip_addr);
 
     // add ipv4 crc
-
     if (arp.fetchArpEntry(dip_addr)) |dmac| {
-        const packet_end = 14 + @sizeOf(IPv4Header) + payload.len;
-        eth.send(dmac, ctx.buffer[14..packet_end], .{ .buffer = ctx.buffer, .len_or_type = eth.EtherType.IPv4 }) catch {
+        // const packet_end = 14 + @sizeOf(IPv4Header) + payload.len;
+        eth.send(dmac, slot, .IPv4) catch {
             try hal.printf("Error eth send\n", .{});
         };
+        // eth.send(dmac, ctx.buffer[14..packet_end], .{ .buffer = ctx.buffer, .len_or_type = eth.EtherType.IPv4 }) catch {
     } else {
         try hal.printf("Arp not resolved\n", .{});
     }
 }
+
+// pub fn send(dip_addr: u32, payload: []u8, ctx: Context) !void {
+//     const header: IPv4Header = .{
+//         .length = std.mem.nativeToBig(u16, @intCast(@sizeOf(IPv4Header) + payload.len)),
+//         .ttl = 255,
+//         .protocol = @as(u8, @intFromEnum(ctx.proto)),
+//         .saddr = ip_addr,
+//         .daddr = dip_addr,
+//     };
+
+//     // try hal.printf("IPV4 Len: {d}\n", .{payload.len});
+
+//     const pos: usize = 14;
+//     const end: usize = 14 + @sizeOf(IPv4Header);
+//     @memcpy(ctx.buffer[pos..end], std.mem.asBytes(&header));
+
+//     // var dmac_addr = try resolveMacAddress(dip_addr);
+
+//     // add ipv4 crc
+
+//     if (arp.fetchArpEntry(dip_addr)) |dmac| {
+//         const packet_end = 14 + @sizeOf(IPv4Header) + payload.len;
+//         eth.send(dmac, ctx.buffer[14..packet_end], .{ .buffer = ctx.buffer, .len_or_type = eth.EtherType.IPv4 }) catch {
+//             try hal.printf("Error eth send\n", .{});
+//         };
+//     } else {
+//         try hal.printf("Arp not resolved\n", .{});
+//     }
+// }
 
 pub fn processIPv4Frame(frame: eth.EthernetFrame) !void {
     const header: IPv4Header = std.mem.bytesToValue(IPv4Header, frame.payload[0..@sizeOf(IPv4Header)]);

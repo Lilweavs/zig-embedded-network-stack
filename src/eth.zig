@@ -45,6 +45,40 @@ const MacAddr = struct {
     }
 };
 
+pub const Node = struct {
+    next: ?*Node = null,
+    header: [64]u8 = undefined,
+    len: usize = 0,
+    data: []u8 = &.{},
+};
+
+pub const FrameQueue = struct {
+    const Self = @This();
+
+    slots: [16]Node = .{},
+
+    fslots: ?*Node = null,
+    tslots: ?*Node = null,
+
+    pub fn init(s: *Self) void {
+        s.fslots = s.slots[0];
+        var slot: *Node = &s.fslots.?;
+        for (s.slots[1..]) |*nslot| {
+            slot.next = nslot;
+            slot = nslot;
+        }
+    }
+
+    pub fn requestSlot(s: *Self) ?*Node {
+        var rslot: ?*Node = null;
+        if (s.fslots) |slot| {
+            rslot = slot;
+            s.fslots = slot.next orelse null;
+        }
+        return rslot;
+    }
+};
+
 pub fn fmtMacAddr(mac: [6]u8) std.fmt.Formatter(MacAddr.format) {
     return .{ .data = MacAddr{ .mac = mac } };
 }
@@ -81,33 +115,46 @@ pub const Context = struct {
     len_or_type: EtherType,
 };
 
-pub fn send(dmac_addr: [6]u8, payload: []u8, ctx: Context) !void {
+pub fn send(dmac_addr: [6]u8, slot: *Node, proto: EtherType) !void {
     const header: EthernetHeader = .{
         .dest = dmac_addr,
         .src = mac_addr,
-        .len_or_type = std.mem.nativeToBig(u16, @intFromEnum(ctx.len_or_type)),
+        .len_or_type = std.mem.nativeToBig(u16, @intFromEnum(proto)),
     };
 
-    @memcpy(ctx.buffer[0..14], std.mem.asBytes(&header));
+    @memcpy(slot.header[0..14], std.mem.asBytes(&header));
 
-    // for (0..14 + payload.len) |i| {
-    //     try hal.printf("{X:0>2} ", .{ctx.buffer[i]});
-    // }
-    // var p = [_]u8{ 0x54, 0x65, 0x73, 0x74, 0x69, 0x6e, 0x67, 0x20, 0x45, 0x74, 0x68, 0x65, 0x72, 0x6e, 0x65, 0x74, 0x20, 0x6f, 0x6e, 0x20, 0x53, 0x54, 0x4d, 0x33, 0x32 };
-    // const payload_len = p.len;
-
-    // if (hal.requestBuffer()) |buffer| {
-    //     // @memcpy(buffer.ptr, p);
-    //     try hal.transmitEthFrame(buffer);
-    // }
-
-    hal.transmitEthFrame(ctx.buffer[0 .. 14 + payload.len]);
-
-    // ETH_ConstructEthernetFrame(TxBuffer.buffer, dest_mac, src_mac, type, payload, payload_len);
-    // TxConfig.TxBuffer = &TxBuffer;
-
-    // HAL_ETH_Transmit(&heth, &TxConfig, 1000);
-    // HAL_ETH_ReleaseTxPacket(&heth);
-
-    // try hal.transmitEthFrame(ctx.buffer);
+    // hal.transmitEthFrame(ctx.buffer[0 .. 14 + payload.len]);
+    wire.transmitEthFrame();
 }
+
+// pub fn send(dmac_addr: [6]u8, payload: []u8, ctx: Context) !void {
+//     const header: EthernetHeader = .{
+//         .dest = dmac_addr,
+//         .src = mac_addr,
+//         .len_or_type = std.mem.nativeToBig(u16, @intFromEnum(ctx.len_or_type)),
+//     };
+
+//     @memcpy(ctx.buffer[0..14], std.mem.asBytes(&header));
+
+//     // for (0..14 + payload.len) |i| {
+//     //     try hal.printf("{X:0>2} ", .{ctx.buffer[i]});
+//     // }
+//     // var p = [_]u8{ 0x54, 0x65, 0x73, 0x74, 0x69, 0x6e, 0x67, 0x20, 0x45, 0x74, 0x68, 0x65, 0x72, 0x6e, 0x65, 0x74, 0x20, 0x6f, 0x6e, 0x20, 0x53, 0x54, 0x4d, 0x33, 0x32 };
+//     // const payload_len = p.len;
+
+//     // if (hal.requestBuffer()) |buffer| {
+//     //     // @memcpy(buffer.ptr, p);
+//     //     try hal.transmitEthFrame(buffer);
+//     // }
+
+//     hal.transmitEthFrame(ctx.buffer[0 .. 14 + payload.len]);
+
+//     // ETH_ConstructEthernetFrame(TxBuffer.buffer, dest_mac, src_mac, type, payload, payload_len);
+//     // TxConfig.TxBuffer = &TxBuffer;
+
+//     // HAL_ETH_Transmit(&heth, &TxConfig, 1000);
+//     // HAL_ETH_ReleaseTxPacket(&heth);
+
+//     // try hal.transmitEthFrame(ctx.buffer);
+// }
