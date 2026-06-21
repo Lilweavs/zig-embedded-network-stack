@@ -1,30 +1,15 @@
 const std = @import("std");
-const udp = @import("udp.zig");
-const ipv4 = @import("ipv4.zig");
-const eth = @import("eth.zig");
-const hal = @import("hal.zig");
+const types = @import("../types.zig");
+const udp = @import("../core/udp.zig");
+const ipv4 = @import("../core/ipv4.zig");
 
 const server_port: u16 = 67;
 const client_port: u16 = 68;
 
-// step 1: Discover
-//   client -> server
-//     a. send broadcast DHCPDISCOVER (OP 0x01) message to destination 255.255.255.255 or specific subnet broadcast address
-//     b. src: 68
-//     c. des: 67
-// step 2: Offer   : server    -> client
-//     a. server provides ip adress information to client
-// step 3: Request
-//   client    -> server
-//     a. client must repond with broadcast message
-// step 4: Acknowledge: server -> client
-
-// DHCP Client
-//
-
 var state: DHCPState = .Uninit;
 var socket: ?*udp.UDPSocket = null;
 var start_time: u32 = 0;
+var dhcp_iface: *types.Interface = undefined;
 
 const DHCPState = enum {
     Disable,
@@ -68,10 +53,9 @@ var requested_addr: u32 = 0;
 var gateway_addr: u32 = 0;
 var lease_time: u32 = 0;
 var renewal_time: u32 = 0;
-// this should request a UDP socket and set the DHCP state
-// to discover
 
-pub fn init() void {
+pub fn init(iface: *types.Interface) void {
+    dhcp_iface = iface;
     socket = udp.requestSocketFromPool();
     if (socket) |s| {
         s.bind(client_port, dhcpRecvCallback);
@@ -79,16 +63,8 @@ pub fn init() void {
 
         var prng = std.Random.DefaultPrng.init(1);
         const rand = prng.random();
-
         magic_number = rand.int(u32);
     }
-    // if (udp.requestSocketFromPool()) |ptr| {
-    // ptr.bind(client_port, dhcpRecvCallback);
-    // @compileLog(@TypeOf(sock));
-    // sock = ptr;
-    // state = .Discover;
-    // } else {}
-
 }
 
 const OptionIterator = struct {
@@ -102,22 +78,15 @@ const OptionIterator = struct {
         if (code == .End) return null;
         if (code == .Pad) {
             self.index += 1;
-            return .{
-                .code = code,
-                .payload = &.{},
-            };
+            return .{ .code = code, .payload = &.{} };
         }
 
         const length = self.buffer[self.index + 1];
-
         self.index += 2 + length;
 
         if (self.index > self.buffer.len) return null;
 
-        return .{
-            .code = code,
-            .payload = self.buffer[self.index - length .. self.index],
-        };
+        return .{ .code = code, .payload = self.buffer[self.index - length .. self.index] };
     }
 };
 
@@ -130,84 +99,39 @@ fn dhcpRecvCallback(sock: *udp.UDPSocket, addr: u32, port: u16, payload: []const
     _ = sock;
     _ = addr;
     _ = port;
-    // hal.printf("Received!\n", .{}) catch {};
 
-    // perform sanity checks
     if (payload.len < @sizeOf(DHCPHeader)) return;
 
     const dhcp_data: DHCPHeader = std.mem.bytesToValue(DHCPHeader, payload[0..@sizeOf(DHCPHeader)]);
 
-    if (dhcp_data.xid != magic_number) {
-        // hal.printf("XID doesn't: {X:0>8} {X:0>8}\n", .{ dhcp_data.xid, magic_number }) catch {};
-        return;
-    } else {
-        // hal.printf("XID Matches: {X:0>8} {X:0>8}\n", .{ dhcp_data.xid, magic_number }) catch {};
-    }
+    if (dhcp_data.xid != magic_number) return;
 
     if (state == .WaitingForOffer and dhcp_data.op == 2) {
-
-        // get ready to send out a DHCPREQUEST
-        // server_addr = std.mem.bytesToValue(u32, &dhcp_data.siaddr);
         requested_addr = std.mem.bytesToValue(u32, &dhcp_data.yiaddr);
-
-        ipv4.printIpAddr(server_addr) catch {};
-        ipv4.printIpAddr(requested_addr) catch {};
 
         var iter = OptionIterator{ .buffer = payload[@sizeOf(DHCPHeader)..] };
 
         while (iter.next()) |option| {
-            // hal.printf("Option: {d}\n", .{@intFromEnum(option.code)}) catch {};
             switch (option.code) {
-                .Pad => {},
-                .SubnetMask => {
-                    subnet_mask = std.mem.bytesToValue(u32, option.payload);
-                    ipv4.printIpAddr(subnet_mask) catch {};
-                },
-                .Router => {},
-                .TimeServer => {},
-                .DomainNameServer => {},
-                .HostName => {},
-                .DomainName => {},
-                .BroadcastAddress => {
-                    broadcast_address = std.mem.bytesToValue(u32, option.payload);
-                },
-                .NTPServers => {},
-                .RequestIdAddress => {},
-                .IPAddressLeaseTime => {
-                    lease_time = std.mem.bigToNative(u32, std.mem.bytesToValue(u32, option.payload));
-                    // hal.printf("Lease Time: {d}\n", .{lease_time}) catch {};
-                },
-                .OptionOverload => {},
-                .DHCPMessageType => {},
-                .ServerIdentifier => {},
-                .ParameterRequestList => {},
-                .Message => {},
-                .RenewalTime => {},
-                .RebindingTime => {},
-                .End => {},
-                else => {
-                    // unknown option
-                },
+                .SubnetMask => { subnet_mask = std.mem.bytesToValue(u32, option.payload); },
+                .BroadcastAddress => { broadcast_address = std.mem.bytesToValue(u32, option.payload); },
+                .IPAddressLeaseTime => { lease_time = std.mem.bigToNative(u32, std.mem.bytesToValue(u32, option.payload)); },
+                else => {},
             }
         }
 
         dhcpRequest() catch {};
     } else if (state == .WaitingForAck and dhcp_data.op == 2) {
-        // hal.printf("DHCP Complete!\n", .{}) catch {};
         state = .Complete;
-        ipv4.ip_addr = requested_addr;
+        dhcp_iface.ip_addr = requested_addr;
     }
 }
 
 pub fn dhcpPoll() DHCPState {
     switch (state) {
         .Disable => {},
-        .Uninit => {
-            init();
-        },
-        .Discover => {
-            try dhcpDiscover();
-        },
+        .Uninit => {},
+        .Discover => { dhcpDiscover() catch {}; },
         .WaitingForOffer => {},
         .WaitingForAck => {},
         .Complete => {},
@@ -216,7 +140,6 @@ pub fn dhcpPoll() DHCPState {
 }
 
 const DHCPOptions = enum(u8) {
-    // BOOTP Vender Information Extensions
     Pad = 0,
     SubnetMask = 1,
     Router = 3,
@@ -224,13 +147,9 @@ const DHCPOptions = enum(u8) {
     DomainNameServer = 6,
     HostName = 12,
     DomainName = 15,
-    // other
     InterfaceMTU = 26,
-    // IP Layer Parametes Per Interface
     BroadcastAddress = 28,
-    // Application and Service Parameters
     NTPServers = 42,
-    // DHCP Extensions
     RequestIdAddress = 50,
     IPAddressLeaseTime = 51,
     OptionOverload = 52,
@@ -250,16 +169,15 @@ pub fn status() DHCPState {
 
 pub fn dhcpRequest() !void {
     if (socket) |s| {
-        const time_since_discover: u16 = @intCast((hal.millis() - start_time) / 1000);
+        const time_since_discover: u16 = @intCast((start_time) / 1000);
 
         var dhcp_header: DHCPHeader = .{
             .op = 0x01,
             .xid = magic_number,
             .secs = time_since_discover,
         };
-        // set_start time
 
-        @memcpy(dhcp_header.chaddr[0..6], &eth.mac_addr);
+        @memcpy(dhcp_header.chaddr[0..6], &dhcp_iface.mac_addr);
 
         var pos: usize = 0;
         var end: usize = @sizeOf(DHCPHeader);
@@ -268,7 +186,6 @@ pub fn dhcpRequest() !void {
         pos = end;
         end += 3;
 
-        // DHCP Message type: Request
         dhcp_buffer[pos] = 0x35;
         dhcp_buffer[pos + 1] = 0x01;
         dhcp_buffer[pos + 2] = 0x03;
@@ -280,13 +197,9 @@ pub fn dhcpRequest() !void {
         @memcpy(dhcp_buffer[pos..end], std.mem.asBytes(&requested_addr));
         dhcp_buffer[end] = 0xff;
 
-        // try hal.printf("DHCP Len: {d}\n", .{end + 1});
-
-        s.send_broadcast(server_port, dhcp_buffer[0 .. end + 1]) catch {};
+        s.send_broadcast(dhcp_iface, server_port, dhcp_buffer[0 .. end + 1]) catch {};
 
         state = .WaitingForAck;
-    } else {
-        // nothing to do
     }
 }
 
@@ -298,10 +211,9 @@ pub fn dhcpDiscover() !void {
             .secs = 0x0000,
         };
 
-        // set_start time
-        start_time = hal.millis();
+        start_time = 0;
 
-        @memcpy(dhcp_header.chaddr[0..6], &eth.mac_addr);
+        @memcpy(dhcp_header.chaddr[0..6], &dhcp_iface.mac_addr);
 
         var pos: usize = 0;
         var end: usize = @sizeOf(DHCPHeader);
@@ -310,19 +222,14 @@ pub fn dhcpDiscover() !void {
         pos = end;
         end += 3;
 
-        // DHCP Message type: Discover
         dhcp_buffer[pos] = 0x35;
         dhcp_buffer[pos + 1] = 0x01;
         dhcp_buffer[pos + 2] = 0x01;
         dhcp_buffer[pos + 3] = 0xff;
 
-        // try hal.printf("DHCP Len: {d}\n", .{end + 1});
-
-        s.send_broadcast(server_port, dhcp_buffer[0 .. end + 1]) catch {};
+        s.send_broadcast(dhcp_iface, server_port, dhcp_buffer[0 .. end + 1]) catch {};
 
         state = .WaitingForOffer;
-    } else {
-        // nothing to do
     }
 }
 
