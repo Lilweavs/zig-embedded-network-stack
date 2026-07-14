@@ -1,8 +1,8 @@
 const std = @import("std");
 
 pub const VersionIHl = packed struct(u8) {
-    version: u4,
     ihl: u4,
+    version: u4,
 };
 
 pub const IPv4Header = extern struct {
@@ -30,11 +30,6 @@ pub const IPv4Header = extern struct {
     pub fn offset(self: Self) u13 {
         return (std.mem.littleToNative(u16, self.flags_offset) & 0x1FFF);
     }
-};
-
-pub const IPv4Frame = struct {
-    header: IPv4Header,
-    payload: []u8,
 };
 
 pub const Protocol = enum(u8) {

@@ -17,12 +17,14 @@ const Ipv4ProtocolHandler = *const fn (iface: *types.Interface, saddr: u32, buff
 
 var protocol_handlers: [256]?Ipv4ProtocolHandler = .{null} ** 256;
 
+const logger = std.log.scoped(.ipv4);
+
 pub fn registerProtocolHandler(proto: Protocol, handler: Ipv4ProtocolHandler) void {
     protocol_handlers[@intFromEnum(proto)] = handler;
 }
 
-pub fn send(iface: *types.Interface, daddr: u32, slot: *types.Node, proto: Protocol) void {
-    const ip_payload_len: u32 = @intCast(slot.data.len);
+pub fn send(iface: *types.Interface, daddr: u32, frame: *types.Frame, proto: Protocol) void {
+    const ip_payload_len: u32 = @intCast(frame.len);
     const header: IPv4Header = .{
         .length = std.mem.nativeToBig(u16, @intCast(@sizeOf(IPv4Header) + ip_payload_len)),
         .ttl = 255,
@@ -31,21 +33,27 @@ pub fn send(iface: *types.Interface, daddr: u32, slot: *types.Node, proto: Proto
         .daddr = daddr,
     };
 
-    @memcpy(slot.header[types.NET_HEADER_OFFSET..][0..@sizeOf(IPv4Header)], std.mem.asBytes(&header));
+    @memcpy(frame.buffer[types.NET_HEADER_OFFSET..][0..@sizeOf(IPv4Header)], std.mem.asBytes(&header));
+
+    frame.len += @sizeOf(IPv4Header);
+
+    // if we are a braodcast address we can skip the arp lookup
+    if (header.daddr == IP_BROADCAST_ADDR) {
+        iface.send(.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, frame, @intFromEnum(@import("../syntax/eth.zig").EtherType.IPv4));
+    }
 
     if (arp.fetchArpEntry(iface, daddr)) |dmac| {
-        iface.send(dmac, slot, @intFromEnum(@import("../syntax/eth.zig").EtherType.IPv4));
+        iface.send(dmac, frame, @intFromEnum(@import("../syntax/eth.zig").EtherType.IPv4));
     }
 }
 
 pub fn processIPv4Frame(iface: *types.Interface, buffer: []u8) void {
-    const payload = buffer[@sizeOf(@import("../syntax/eth.zig").EthernetHeader)..];
-    const header: IPv4Header = std.mem.bytesToValue(IPv4Header, payload[0..@sizeOf(IPv4Header)]);
-
-    const pos: usize = @sizeOf(IPv4Header);
-    const end: usize = std.mem.bigToNative(u16, header.length);
+    const header: IPv4Header = std.mem.bytesToValue(IPv4Header, buffer[0..@sizeOf(IPv4Header)]);
+    const length: usize = @intCast(std.mem.bigToNative(u16, header.length));
+    const header_len = @as(usize, header.version_ihl.ihl) * 4;
+    const payload = buffer[header_len..length];
 
     if (protocol_handlers[header.protocol]) |handler| {
-        handler(iface, header.saddr, payload[pos..end]);
+        handler(iface, header.saddr, payload);
     }
 }

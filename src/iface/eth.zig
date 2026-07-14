@@ -4,19 +4,22 @@ const syntax = @import("../syntax/eth.zig");
 const arp = @import("../core/arp.zig");
 const ipv4 = @import("../core/ipv4.zig");
 
+const logger = std.log.scoped(.eth);
+
 pub const EthDevice = struct {
     transmit: *const fn (buf: []const u8) void = undefined,
     poll_recv: *const fn () ?[]u8 = undefined,
 };
 
-pub fn ethSend(dev: *EthDevice, iface: *types.Interface, dst_mac: [6]u8, slot: *types.Node, ethertype: u16) void {
+pub fn ethSend(dev: *EthDevice, iface: *types.Interface, dst_mac: [6]u8, frame: *types.Frame, ethertype: u16) void {
     const header: syntax.EthernetHeader = .{
         .dest = dst_mac,
         .src = iface.mac_addr,
         .len_or_type = std.mem.nativeToBig(u16, ethertype),
     };
-    syntax.writeHeader(slot.header[0..], header);
-    dev.transmit(slot.header[0..slot.len]);
+    frame.len += @sizeOf(syntax.EthernetHeader);
+    syntax.writeHeader(frame.buffer[0..], header);
+    dev.transmit(frame.buffer[0..frame.len]);
 }
 
 pub fn ethProcess(dev: *EthDevice, iface: *types.Interface, buffer: []u8) void {
@@ -26,7 +29,7 @@ pub fn ethProcess(dev: *EthDevice, iface: *types.Interface, buffer: []u8) void {
 
     if (protocol >= 1536) {
         switch (@as(syntax.EtherType, @enumFromInt(protocol))) {
-            .IPv4 => ipv4.processIPv4Frame(iface, buffer),
+            .IPv4 => ipv4.processIPv4Frame(iface, buffer[types.NET_HEADER_OFFSET..]),
             .ARP => arp.processARPFrame(iface, buffer),
             _ => {},
         }

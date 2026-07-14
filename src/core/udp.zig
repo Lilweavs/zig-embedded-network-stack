@@ -11,6 +11,8 @@ var udp_pool: [udp_pool_size]UDPSocket = .{UDPSocket{}} ** udp_pool_size;
 
 const UDPCallbackFn = *const fn (socket: *UDPSocket, addr: u32, port: u16, payload: []const u8) void;
 
+const logger = std.log.scoped(.udp);
+
 pub fn requestSocketFromPool() ?*UDPSocket {
     for (0..udp_pool.len) |i| {
         if (udp_pool[i].active == false) {
@@ -31,13 +33,16 @@ pub fn returnSocketToPool(socket: *UDPSocket) void {
 pub fn processUDPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
     _ = iface;
     const header: UDPHeader = std.mem.bytesToValue(UDPHeader, buffer[0..@sizeOf(UDPHeader)]);
-    const length = std.mem.bigToNative(u16, header.length) - @sizeOf(UDPHeader);
+    const length: usize = @intCast(std.mem.bigToNative(u16, header.length));
     const dport = std.mem.bigToNative(u16, header.dport);
     const sport = std.mem.bigToNative(u16, header.sport);
+    const payload = buffer[@sizeOf(UDPHeader)..length];
+
+    logger.debug("UDP: Frame Received -> {d}:{d}\n", .{ dport, sport });
 
     for (&udp_pool) |*sock| {
         if (sock.active and sock.port == dport) {
-            return if (sock.recv_callback) |callback| callback(sock, saddr, sport, buffer[0..length]);
+            return if (sock.recv_callback) |callback| callback(sock, saddr, sport, payload);
         }
     }
 }
@@ -57,27 +62,24 @@ pub const UDPSocket = struct {
     }
 
     pub fn send(self: *Self, iface: *types.Interface, dip_addr: u32, port: u16, payload: []const u8) void {
-        if (iface.requestSlot()) |slot| {
-            const upper_start: usize = types.TRANSPORT_HEADER_OFFSET;
-            const udp_len = @as(u16, @intCast(payload.len + @sizeOf(UDPHeader)));
+        if (iface.requestFrame()) |frame| {
+            frame.len = @as(u16, @intCast(payload.len + @sizeOf(UDPHeader)));
+            const base_idx = types.TRANSPORT_HEADER_OFFSET;
 
-            const header = createUDPHeader(self.port, port, udp_len, 0x0000);
+            const header = createUDPHeader(self.port, port, @intCast(frame.len), 0x0000);
 
-            var pos: usize = upper_start;
+            var pos: usize = base_idx;
             var end: usize = pos + @sizeOf(UDPHeader);
-            @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
+            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
             pos = end;
             end = pos + payload.len;
-            @memcpy(slot.header[pos..end], payload);
+            @memcpy(frame.buffer[pos..end], payload);
 
-            slot.data = slot.header[upper_start..end];
-            slot.len = upper_start + slot.data.len;
+            const checksum = ipv4.calcPseudoChecksum(frame.buffer[base_idx..end], .UDP, 0, dip_addr);
+            @memcpy(frame.buffer[base_idx + @offsetOf(UDPHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-            const checksum = ipv4.calcPseudoChecksum(slot.data, .UDP, 0, dip_addr);
-            @memcpy(slot.header[upper_start + @offsetOf(UDPHeader, "checksum")..][0..2], std.mem.asBytes(&checksum));
-
-            ipv4.send(iface, dip_addr, slot, .UDP);
+            ipv4.send(iface, dip_addr, frame, .UDP);
         }
     }
 

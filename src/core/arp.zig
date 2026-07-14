@@ -37,7 +37,7 @@ pub fn processARPFrame(iface: *types.Interface, buffer: []u8) void {
             .tipaddr = recv_header.sipaddr,
         };
 
-        if (iface.requestSlot()) |slot| {
+        if (iface.requestFrame()) |frame| {
             const eth_type = @import("../syntax/eth.zig").EtherType.ARP;
             const eth_resp: @import("../syntax/eth.zig").EthernetHeader = .{
                 .dest = recv_header.shwaddr,
@@ -47,14 +47,14 @@ pub fn processARPFrame(iface: *types.Interface, buffer: []u8) void {
 
             var pos: usize = 0;
             var end: usize = @sizeOf(@import("../syntax/eth.zig").EthernetHeader);
-            @memcpy(slot.header[pos..end], std.mem.asBytes(&eth_resp));
+            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&eth_resp));
 
             pos = end;
             end = pos + @sizeOf(ArpFrame);
-            @memcpy(slot.header[pos..end], std.mem.asBytes(&resp_header));
+            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&resp_header));
 
-            slot.len = end;
-            iface.send(recv_header.shwaddr, slot, @intFromEnum(eth_type));
+            frame.len = end;
+            iface.send(recv_header.shwaddr, frame, @intFromEnum(eth_type));
         }
 
         if (fetchArpEntry(iface, recv_header.sipaddr)) |_| {} else {

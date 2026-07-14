@@ -4,6 +4,7 @@ const ipv4 = @import("../core/ipv4.zig");
 const icmp = @import("../core/icmp.zig");
 const udp = @import("../core/udp.zig");
 const tcp = @import("../core/tcp.zig");
+const time = @import("../time.zig");
 
 pub const Config = struct {
     enable_arp: bool = true,
@@ -11,6 +12,7 @@ pub const Config = struct {
     enable_icmp: bool = true,
     enable_udp: bool = true,
     enable_tcp: bool = true,
+    millis: *const fn () u32,
 };
 
 pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, comptime cfg: Config) type {
@@ -21,6 +23,8 @@ pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, co
         arp_backing: [iface_count][arp_entries]types.ArpEntry = undefined,
 
         pub fn init(self: *Self) void {
+            time.set(cfg.millis);
+
             for (&self.interfaces, &self.arp_backing) |*iface, *backing| {
                 iface.arp_table = backing;
                 iface.init();

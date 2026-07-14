@@ -1,5 +1,6 @@
 const std = @import("std");
 
+pub const time = @import("time.zig");
 pub const types = @import("types.zig");
 
 pub const syntax = struct {

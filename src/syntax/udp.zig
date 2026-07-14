@@ -1,11 +1,11 @@
 const std = @import("std");
 const ipv4 = @import("ipv4.zig");
 
-pub const UDPHeader = packed struct(u64) {
-    sport: u16 = 0x0000,
-    dport: u16 = 0x0000,
-    length: u16 = 0x0000,
-    checksum: u16 = 0x0000,
+pub const UDPHeader = extern struct {
+    sport: u16 align(1) = 0x0000,
+    dport: u16 align(1) = 0x0000,
+    length: u16 align(1) = 0x0000,
+    checksum: u16 align(1) = 0x0000,
 };
 
 pub fn createHeader(sport: u16, dport: u16, length: u16, checksum: u16) UDPHeader {

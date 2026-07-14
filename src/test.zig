@@ -15,12 +15,17 @@ test "include core_tcp" { _ = core_tcp; }
 test "include core_stack" { _ = core_stack; }
 test "include dhcp" { _ = dhcp; }
 
+fn testMillis() u32 {
+    return 0;
+}
+
 test "NetworkStack creation" {
     const Stack = core_stack.NetworkStack(2, 8, .{
         .enable_tcp = true,
         .enable_udp = true,
         .enable_arp = true,
         .enable_icmp = true,
+        .millis = testMillis,
     });
     var stack: Stack = .{};
     stack.init();
@@ -35,6 +40,7 @@ test "loopback device send/recv" {
         .enable_udp = false,
         .enable_arp = false,
         .enable_icmp = false,
+        .millis = testMillis,
     });
     var stack: Stack = .{};
     stack.init();
