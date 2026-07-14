@@ -142,7 +142,6 @@ fn dhcpRecvCallback(sock: *udp.UDPSocket, addr: u32, port: u16, payload: []const
         logger.debug("DHCP: Received Ack\n", .{});
         state = .Complete;
         dhcp_iface.ip_addr = requested_addr;
-        // logger.debug("IpAddr: {d}.{d}.{d}.{d}\n", .{ requested_addr & 0xFF, (requested_addr >> 8) & 0xFF, (requested_addr >> 16) & 0xFF, (requested_addr >> 24) & 0xFF });
         logger.debug("IpAddr: {f}\n", .{ipv4.fmtIpAddr(requested_addr)});
     }
 }

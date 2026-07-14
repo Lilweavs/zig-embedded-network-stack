@@ -42,18 +42,16 @@ pub const Protocol = enum(u8) {
 
 pub const IP_BROADCAST_ADDR: u32 = std.math.maxInt(u32);
 
-const IpAddr = struct {
+pub const IpAddr = struct {
     addr: u32,
-    pub fn format(self: IpAddr, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
+    pub fn format(self: IpAddr, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const bytes = std.mem.asBytes(&self.addr);
-        try std.fmt.format(writer, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] });
+        try writer.print("{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] });
     }
 };
 
-pub fn fmtIpAddr(addr: u32) std.fmt.Formatter(IpAddr.format) {
-    return .{ .data = IpAddr{ .addr = addr } };
+pub fn fmtIpAddr(addr: u32) IpAddr {
+    return .{ .addr = addr };
 }
 
 pub fn calculateChecksum(buffer: []const u8, init_value: u32) u16 {
