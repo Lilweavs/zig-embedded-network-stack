@@ -21,6 +21,8 @@ const DHCPState = enum {
     WaitingForOffer,
     WaitingForAck,
     Complete,
+    Renewal,
+    Rebind,
 };
 
 const DHCPOpCode = enum(u8) {
@@ -56,6 +58,7 @@ var requested_addr: u32 = 0;
 var gateway_addr: u32 = 0;
 var lease_time: u32 = 0;
 var renewal_time: u32 = 0;
+var rebind_time: u32 = 0;
 
 pub fn init(iface: *types.Interface) void {
     dhcp_iface = iface;
@@ -132,6 +135,12 @@ fn dhcpRecvCallback(sock: *udp.UDPSocket, addr: u32, port: u16, payload: []const
                 },
                 .IPAddressLeaseTime => {
                     lease_time = std.mem.bigToNative(u32, std.mem.bytesToValue(u32, option.payload));
+                    const now_s = time.millis() / 1000;
+                    renewal_time = now_s + lease_time / 2;
+                    rebind_time = now_s + lease_time * 7 / 8;
+                },
+                .ServerIdentifier => {
+                    server_addr = std.mem.bytesToValue(u32, option.payload);
                 },
                 else => {},
             }
@@ -140,9 +149,23 @@ fn dhcpRecvCallback(sock: *udp.UDPSocket, addr: u32, port: u16, payload: []const
         dhcpRequest() catch {};
     } else if (state == .WaitingForAck and dhcp_data.op == 2) {
         logger.debug("DHCP: Received Ack\n", .{});
-        state = .Complete;
         dhcp_iface.ip_addr = requested_addr;
-        logger.debug("IpAddr: {f}\n", .{ipv4.fmtIpAddr(requested_addr)});
+
+        var iter = OptionIterator{ .buffer = payload[@sizeOf(DHCPHeader)..] };
+        while (iter.next()) |option| {
+            switch (option.code) {
+                .IPAddressLeaseTime => {
+                    lease_time = std.mem.bigToNative(u32, std.mem.bytesToValue(u32, option.payload));
+                    const now_s = time.millis() / 1000;
+                    renewal_time = now_s + lease_time / 2;
+                    rebind_time = now_s + lease_time * 7 / 8;
+                },
+                else => {},
+            }
+        }
+
+        state = .Complete;
+        logger.debug("IpAddr: {}\n", .{ipv4.fmtIpAddr(requested_addr)});
     }
 }
 
@@ -156,7 +179,18 @@ pub fn poll() DHCPState {
         },
         .WaitingForOffer => {},
         .WaitingForAck => {},
-        .Complete => {},
+        .Complete => {
+            const now_s = time.millis() / 1000;
+            if (now_s >= rebind_time) {
+                logger.debug("DHCP: Rebinding\n", .{});
+                dhcpRebind();
+            } else if (now_s >= renewal_time) {
+                logger.debug("DHCP: Renewing\n", .{});
+                dhcpRenewal();
+            }
+        },
+        .Renewal => {},
+        .Rebind => {},
     }
     return state;
 }
@@ -247,11 +281,67 @@ pub fn dhcpDiscover() void {
         dhcp_buffer[pos] = 0x35;
         dhcp_buffer[pos + 1] = 0x01;
         dhcp_buffer[pos + 2] = 0x01;
-        dhcp_buffer[pos + 3] = 0xff;
+        dhcp_buffer[end] = 0xff;
 
         s.send_broadcast(dhcp_iface, server_port, dhcp_buffer[0 .. end + 1]);
 
         state = .WaitingForOffer;
+    }
+}
+
+pub fn dhcpRenewal() void {
+    if (socket) |s| {
+        var dhcp_header: DHCPHeader = .{
+            .op = 0x01,
+            .xid = magic_number,
+            .ciaddr = @bitCast(dhcp_iface.ip_addr),
+        };
+
+        @memcpy(dhcp_header.chaddr[0..6], &dhcp_iface.mac_addr);
+
+        var pos: usize = 0;
+        var end: usize = @sizeOf(DHCPHeader);
+        @memcpy(dhcp_buffer[pos..end], std.mem.asBytes(&dhcp_header));
+
+        pos = end;
+        end += 3;
+
+        dhcp_buffer[pos] = 0x35;
+        dhcp_buffer[pos + 1] = 0x01;
+        dhcp_buffer[pos + 2] = 0x03;
+        dhcp_buffer[end] = 0xff;
+
+        s.send(dhcp_iface, server_addr, server_port, dhcp_buffer[0 .. end + 1]);
+
+        state = .WaitingForAck;
+    }
+}
+
+pub fn dhcpRebind() void {
+    if (socket) |s| {
+        var dhcp_header: DHCPHeader = .{
+            .op = 0x01,
+            .xid = magic_number,
+            .ciaddr = @bitCast(dhcp_iface.ip_addr),
+        };
+
+        @memcpy(dhcp_header.chaddr[0..6], &dhcp_iface.mac_addr);
+
+        var pos: usize = 0;
+        var end: usize = @sizeOf(DHCPHeader);
+        @memcpy(dhcp_buffer[pos..end], std.mem.asBytes(&dhcp_header));
+
+        pos = end;
+        end += 3;
+
+        dhcp_buffer[pos] = 0x35;
+        dhcp_buffer[pos + 1] = 0x01;
+        dhcp_buffer[pos + 2] = 0x03;
+        dhcp_buffer[end] = 0xff;
+
+        s.send_broadcast(dhcp_iface, server_port, dhcp_buffer[0 .. end + 1]);
+
+        state = .WaitingForAck;
     }
 }
 
