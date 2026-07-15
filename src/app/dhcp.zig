@@ -111,7 +111,6 @@ pub const DhcpClient = struct {
     socket: ?*udp.UDPSocket = null,
     iface: *types.Interface = undefined,
     discover_time: u32 = 0,
-    dhcp_buffer: [1528]u8 = .{0} ** 1528,
     magic_number: u32 = 0,
     server_addr: u32 = 0,
     subnet_mask: u32 = 0,
@@ -180,6 +179,9 @@ pub const DhcpClient = struct {
 
     fn dhcpSend(self: *Self, msg: MessageType) void {
         if (self.socket) |s| {
+            // RFC2131 miminum required RECEIVE is 576. Transmit is much lower.
+            var buf: [312]u8 = undefined;
+
             const now = time.millis();
             var dhcp_header: DHCPHeader = .{
                 .op = 0x01,
@@ -197,27 +199,27 @@ pub const DhcpClient = struct {
 
             var pos: usize = 0;
             var end: usize = @sizeOf(DHCPHeader);
-            @memcpy(self.dhcp_buffer[pos..end], std.mem.asBytes(&dhcp_header));
+            @memcpy(buf[pos..end], std.mem.asBytes(&dhcp_header));
 
             pos = end;
             end += 3;
-            self.dhcp_buffer[pos] = 0x35;
-            self.dhcp_buffer[pos + 1] = 0x01;
-            self.dhcp_buffer[pos + 2] = if (msg == .Discover) 0x01 else 0x03;
+            buf[pos] = 0x35;
+            buf[pos + 1] = 0x01;
+            buf[pos + 2] = if (msg == .Discover) 0x01 else 0x03;
 
             if (msg == .Request) {
-                self.dhcp_buffer[pos + 3] = 50;
-                self.dhcp_buffer[pos + 4] = 0x04;
+                buf[pos + 3] = 50;
+                buf[pos + 4] = 0x04;
                 pos = pos + 5;
                 end = pos + @sizeOf(u32);
-                @memcpy(self.dhcp_buffer[pos..end], std.mem.asBytes(&self.requested_addr));
+                @memcpy(buf[pos..end], std.mem.asBytes(&self.requested_addr));
             }
 
-            self.dhcp_buffer[end] = 0xff;
+            buf[end] = 0xff;
 
             switch (msg) {
-                .Renew => s.send(self.iface, self.server_addr, server_port, self.dhcp_buffer[0 .. end + 1]),
-                .Discover, .Request, .Rebind => s.send_broadcast(self.iface, server_port, self.dhcp_buffer[0 .. end + 1]),
+                .Renew => s.send(self.iface, self.server_addr, server_port, buf[0 .. end + 1]),
+                .Discover, .Request, .Rebind => s.send_broadcast(self.iface, server_port, buf[0 .. end + 1]),
             }
 
             self.state = switch (msg) {
