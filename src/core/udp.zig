@@ -9,7 +9,7 @@ pub const createUDPHeader = syntax.createHeader;
 const udp_pool_size: usize = 4;
 var udp_pool: [udp_pool_size]UDPSocket = .{UDPSocket{}} ** udp_pool_size;
 
-const UDPCallbackFn = *const fn (socket: *UDPSocket, addr: u32, port: u16, payload: []const u8) void;
+const UDPCallbackFn = *const fn (iface: *types.Interface, socket: *UDPSocket, addr: u32, port: u16, payload: []const u8) void;
 
 const logger = std.log.scoped(.udp);
 
@@ -31,7 +31,6 @@ pub fn returnSocketToPool(socket: *UDPSocket) void {
 }
 
 pub fn processUDPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
-    _ = iface;
     const header: UDPHeader = std.mem.bytesToValue(UDPHeader, buffer[0..@sizeOf(UDPHeader)]);
     const length: usize = @intCast(std.mem.bigToNative(u16, header.length));
     const dport = std.mem.bigToNative(u16, header.dport);
@@ -42,7 +41,7 @@ pub fn processUDPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
 
     for (&udp_pool) |*sock| {
         if (sock.active and sock.port == dport) {
-            return if (sock.recv_callback) |callback| callback(sock, saddr, sport, payload);
+            return if (sock.recv_callback) |callback| callback(iface, sock, saddr, sport, payload);
         }
     }
 }
@@ -54,10 +53,12 @@ pub const UDPSocket = struct {
     port: u16 = 0,
     active: bool = false,
     recv_callback: ?UDPCallbackFn = null,
+    context: ?*anyopaque = null,
 
-    pub fn bind(self: *Self, port: u16, callback: ?UDPCallbackFn) void {
+    pub fn bind(self: *Self, port: u16, callback: ?UDPCallbackFn, context: ?*anyopaque) void {
         self.port = port;
         self.recv_callback = callback;
+        self.context = context;
         self.active = true;
     }
 
@@ -88,10 +89,4 @@ pub const UDPSocket = struct {
     }
 };
 
-pub fn testCallback(socket: *UDPSocket, addr: u32, port: u16, payload: []const u8) bool {
-    _ = socket;
-    _ = addr;
-    _ = port;
-    _ = payload;
-    return true;
-}
+
