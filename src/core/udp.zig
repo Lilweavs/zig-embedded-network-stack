@@ -62,30 +62,20 @@ pub const UDPSocket = struct {
         self.active = true;
     }
 
-    pub fn send(self: *Self, iface: *types.Interface, dip_addr: u32, port: u16, payload: []const u8) void {
-        if (iface.requestFrame()) |frame| {
-            frame.len = @as(u16, @intCast(payload.len + @sizeOf(UDPHeader)));
-            const base_idx = types.TRANSPORT_HEADER_OFFSET;
+    pub fn send(self: *Self, iface: *types.Interface, dip_addr: u32, port: u16, frame: *types.Frame) void {
+        const base_idx = types.TRANSPORT_HEADER_OFFSET;
 
-            const header = createUDPHeader(self.port, port, @intCast(frame.len), 0x0000);
+        const header = createUDPHeader(self.port, port, @intCast(frame.len), 0x0000);
+        @memcpy(frame.buffer[base_idx..][0..@sizeOf(UDPHeader)], std.mem.asBytes(&header));
 
-            var pos: usize = base_idx;
-            var end: usize = pos + @sizeOf(UDPHeader);
-            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
+        const checksum = ipv4.calcPseudoChecksum(frame.buffer[base_idx..][0..frame.len], .UDP, 0, dip_addr);
+        @memcpy(frame.buffer[base_idx + @offsetOf(UDPHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-            pos = end;
-            end = pos + payload.len;
-            @memcpy(frame.buffer[pos..end], payload);
-
-            const checksum = ipv4.calcPseudoChecksum(frame.buffer[base_idx..end], .UDP, 0, dip_addr);
-            @memcpy(frame.buffer[base_idx + @offsetOf(UDPHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
-
-            ipv4.send(iface, dip_addr, frame, .UDP);
-        }
+        ipv4.send(iface, dip_addr, frame, .UDP);
     }
 
-    pub fn send_broadcast(self: *Self, iface: *types.Interface, port: u16, payload: []const u8) void {
-        self.send(iface, ipv4.IP_BROADCAST_ADDR, port, payload);
+    pub fn send_broadcast(self: *Self, iface: *types.Interface, port: u16, frame: *types.Frame) void {
+        self.send(iface, ipv4.IP_BROADCAST_ADDR, port, frame);
     }
 };
 

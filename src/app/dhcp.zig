@@ -69,7 +69,18 @@ pub const DHCPOptions = enum(u8) {
     _,
 };
 
-pub const MessageType = enum {
+pub const DhcpMessageType = enum(u8) {
+    Discover = 0x01,
+    Offer = 0x02,
+    Request = 0x03,
+    Decline = 0x04,
+    Ack = 0x05,
+    Nack = 0x06,
+    Release = 0x07,
+    Inform = 0x08,
+};
+
+pub const MessageType = enum(u8) {
     Discover,
     Request,
     Renew,
@@ -119,7 +130,7 @@ pub const DhcpClient = struct {
     lease_time: u32 = 0,
     renewal_time: u32 = 0,
     rebind_time: u32 = 0,
-    backoff_time: u32 = 0,
+    backoff_time: u32 = 1000, // in milliseconds
     num_retries: u32 = 0,
 
     pub fn init(self: *Self, iface: *types.Interface) void {
@@ -146,13 +157,14 @@ pub const DhcpClient = struct {
             .WaitingForOffer => {
                 const now = time.millis();
                 if (now -| self.discover_time >= self.backoff_time) {
-                    logger.debug("DHCP: Discover retry\n", .{});
                     self.dhcpSend(.Discover);
                     self.backoff_time = @min(self.backoff_time * 2, 60 * std.time.ms_per_s);
+                    logger.debug("DHCP: Discover retry: {d}\n", .{self.backoff_time / 1000});
                     self.num_retries += 1;
                     if (self.num_retries >= max_retries) {
                         logger.debug("DHCP: Discover failed\n", .{});
                         self.state = .Disable;
+                        self.backoff_time = 1000;
                     }
                 }
             },
@@ -179,53 +191,55 @@ pub const DhcpClient = struct {
 
     fn dhcpSend(self: *Self, msg: MessageType) void {
         if (self.socket) |s| {
-            // RFC2131 miminum required RECEIVE is 576. Transmit is much lower.
-            var buf: [312]u8 = undefined;
+            if (self.iface.requestFrame()) |frame| {
+                const now = time.millis();
+                var dhcp_header: DHCPHeader = .{
+                    .op = 0x01,
+                    .xid = self.magic_number,
+                    .ciaddr = switch (msg) {
+                        .Renew, .Rebind => @bitCast(self.iface.ip_addr),
+                        .Discover, .Request => .{ 0, 0, 0, 0 },
+                    },
+                    .secs = if (msg == .Request) @intCast((now -| self.discover_time) / 1000) else 0,
+                };
 
-            const now = time.millis();
-            var dhcp_header: DHCPHeader = .{
-                .op = 0x01,
-                .xid = self.magic_number,
-                .ciaddr = switch (msg) {
-                    .Renew, .Rebind => @bitCast(self.iface.ip_addr),
-                    .Discover, .Request => .{ 0, 0, 0, 0 },
-                },
-                .secs = if (msg == .Request) @intCast((now -| self.discover_time) / 1000) else 0,
-            };
+                if (msg == .Discover) self.discover_time = now;
 
-            if (msg == .Discover) self.discover_time = now;
+                @memcpy(dhcp_header.chaddr[0..6], &self.iface.mac_addr);
 
-            @memcpy(dhcp_header.chaddr[0..6], &self.iface.mac_addr);
+                const dhcp_start = types.TRANSPORT_HEADER_OFFSET + @sizeOf(udp.UDPHeader);
+                var pos: usize = dhcp_start;
+                var end: usize = pos + @sizeOf(DHCPHeader);
+                @memcpy(frame.buffer[pos..end], std.mem.asBytes(&dhcp_header));
 
-            var pos: usize = 0;
-            var end: usize = @sizeOf(DHCPHeader);
-            @memcpy(buf[pos..end], std.mem.asBytes(&dhcp_header));
+                pos = end;
+                end += 3;
+                frame.buffer[pos] = @intFromEnum(DHCPOptions.DHCPMessageType);
+                frame.buffer[pos + 1] = 0x01;
+                frame.buffer[pos + 2] = @intFromEnum(if (msg == .Discover) DhcpMessageType.Discover else DhcpMessageType.Request);
 
-            pos = end;
-            end += 3;
-            buf[pos] = 0x35;
-            buf[pos + 1] = 0x01;
-            buf[pos + 2] = if (msg == .Discover) 0x01 else 0x03;
+                if (msg == .Request) {
+                    frame.buffer[pos + 3] = @intFromEnum(DHCPOptions.RequestIdAddress);
+                    frame.buffer[pos + 4] = 0x04;
+                    pos = pos + 5;
+                    end = pos + @sizeOf(u32);
+                    @memcpy(frame.buffer[pos..end], std.mem.asBytes(&self.requested_addr));
+                }
 
-            if (msg == .Request) {
-                buf[pos + 3] = 50;
-                buf[pos + 4] = 0x04;
-                pos = pos + 5;
-                end = pos + @sizeOf(u32);
-                @memcpy(buf[pos..end], std.mem.asBytes(&self.requested_addr));
+                frame.buffer[end] = @intFromEnum(DHCPOptions.End);
+
+                frame.len = @sizeOf(udp.UDPHeader) + (end + 1 - dhcp_start);
+
+                switch (msg) {
+                    .Renew => s.send(self.iface, self.server_addr, server_port, frame),
+                    .Discover, .Request, .Rebind => s.send_broadcast(self.iface, server_port, frame),
+                }
+
+                self.state = switch (msg) {
+                    .Discover => .WaitingForOffer,
+                    .Request, .Renew, .Rebind => .WaitingForAck,
+                };
             }
-
-            buf[end] = 0xff;
-
-            switch (msg) {
-                .Renew => s.send(self.iface, self.server_addr, server_port, buf[0 .. end + 1]),
-                .Discover, .Request, .Rebind => s.send_broadcast(self.iface, server_port, buf[0 .. end + 1]),
-            }
-
-            self.state = switch (msg) {
-                .Discover => .WaitingForOffer,
-                .Request, .Renew, .Rebind => .WaitingForAck,
-            };
         }
     }
 
