@@ -133,11 +133,11 @@ pub const DhcpClient = struct {
     backoff_time: u32 = 1000, // in milliseconds
     num_retries: u32 = 0,
 
-    pub fn init(self: *Self, iface: *types.Interface) void {
+    pub fn init(self: *Self, iface: *types.Interface) error{PortInUse}!void {
         self.iface = iface;
         self.socket = udp.requestSocketFromPool();
         if (self.socket) |s| {
-            s.bind(client_port, dhcpRecvCallback, self);
+            try s.bind(client_port, dhcpRecvCallback, self);
             self.state = .Discover;
 
             var prng = std.Random.DefaultPrng.init(1);

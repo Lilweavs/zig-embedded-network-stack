@@ -55,11 +55,24 @@ pub const UDPSocket = struct {
     recv_callback: ?UDPCallbackFn = null,
     context: ?*anyopaque = null,
 
-    pub fn bind(self: *Self, port: u16, callback: ?UDPCallbackFn, context: ?*anyopaque) void {
+    pub fn bind(self: *Self, port: u16, callback: ?UDPCallbackFn, context: ?*anyopaque) error{PortInUse}!void {
+        for (&udp_pool) |*sock| {
+            if (sock != self and sock.active and sock.port == port) {
+                return error.PortInUse;
+            }
+        }
         self.port = port;
         self.recv_callback = callback;
         self.context = context;
         self.active = true;
+    }
+
+    pub fn close(self: *Self) void {
+        self.ip_addr = 0;
+        self.port = 0;
+        self.recv_callback = null;
+        self.context = null;
+        self.active = false;
     }
 
     pub fn send(self: *Self, iface: *types.Interface, dip_addr: u32, port: u16, frame: *types.Frame) void {
@@ -78,5 +91,3 @@ pub const UDPSocket = struct {
         self.send(iface, ipv4.IP_BROADCAST_ADDR, port, frame);
     }
 };
-
-
