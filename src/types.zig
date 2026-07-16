@@ -113,6 +113,7 @@ pub const Interface = struct {
             .eth => |*d| eth_mod.ethSend(d, self, dst_mac, frame, ethertype),
             // .loop => |*d| _ = d, // loop_mod.loopSend(d, self, dst_mac, frame, ethertype),
         }
+        self.tx_queue.returnFrame(frame);
     }
 
     pub fn recv(self: *Self) ?[]u8 {
