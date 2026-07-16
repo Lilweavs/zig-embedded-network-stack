@@ -1,10 +1,10 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const syntax = @import("../syntax/udp.zig");
+const syntax = @import("../syntax.zig");
 const ipv4 = @import("../core/ipv4.zig");
 
-pub const UDPHeader = syntax.UDPHeader;
-pub const createUDPHeader = syntax.createHeader;
+pub const UDPHeader = syntax.udp.UDPHeader;
+pub const createUDPHeader = syntax.udp.createHeader;
 
 const udp_pool_size: usize = 4;
 var udp_pool: [udp_pool_size]UDPSocket = .{UDPSocket{}} ** udp_pool_size;

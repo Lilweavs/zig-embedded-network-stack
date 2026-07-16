@@ -1,11 +1,11 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const syntax = @import("../syntax/icmp.zig");
+const syntax = @import("../syntax.zig");
 const ipv4 = @import("../core/ipv4.zig");
 
-pub const PingHeader = syntax.PingHeader;
-pub const PingType = syntax.PingType;
-pub const ICMPType = syntax.ICMPType;
+pub const PingHeader = syntax.icmp.PingHeader;
+pub const PingType = syntax.icmp.PingType;
+pub const ICMPType = syntax.icmp.ICMPType;
 
 const icmp_magic_string: []const u8 = "abcdefghabcdefghabcdefghabcdefgh";
 

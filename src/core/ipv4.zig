@@ -1,17 +1,19 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const syntax = @import("../syntax/ipv4.zig");
+const syntax = @import("../syntax.zig");
+const ipv4 = syntax.ipv4;
+const eth = syntax.eth;
 const arp = @import("../core/arp.zig");
 
-pub const Protocol = syntax.Protocol;
-pub const IPv4Header = syntax.IPv4Header;
-pub const IPv4Frame = syntax.IPv4Frame;
-pub const VersionIHl = syntax.VersionIHl;
-pub const IP_BROADCAST_ADDR = syntax.IP_BROADCAST_ADDR;
-pub const calculateIPv4Checksum = syntax.calculateChecksum;
-pub const calcPseudoChecksum = syntax.calcPseudoChecksum;
-pub const getPsuedoHeaderChecksum = syntax.getPsuedoHeaderChecksum;
-pub const fmtIpAddr = syntax.fmtIpAddr;
+pub const Protocol = ipv4.Protocol;
+pub const IPv4Header = ipv4.IPv4Header;
+pub const IPv4Frame = ipv4.IPv4Frame;
+pub const VersionIHl = ipv4.VersionIHl;
+pub const IP_BROADCAST_ADDR = ipv4.IP_BROADCAST_ADDR;
+pub const calculateIPv4Checksum = ipv4.calculateChecksum;
+pub const calcPseudoChecksum = ipv4.calcPseudoChecksum;
+pub const getPsuedoHeaderChecksum = ipv4.getPsuedoHeaderChecksum;
+pub const fmtIpAddr = ipv4.fmtIpAddr;
 
 const Ipv4ProtocolHandler = *const fn (iface: *types.Interface, saddr: u32, buffer: []u8) void;
 
@@ -39,11 +41,11 @@ pub fn send(iface: *types.Interface, daddr: u32, frame: *types.Frame, proto: Pro
 
     // if we are a braodcast address we can skip the arp lookup
     if (header.daddr == IP_BROADCAST_ADDR) {
-        iface.send(.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, frame, @intFromEnum(@import("../syntax/eth.zig").EtherType.IPv4));
+        iface.send(.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, frame, @intFromEnum(eth.EtherType.IPv4));
     }
 
     if (arp.fetchArpEntry(iface, daddr)) |dmac| {
-        iface.send(dmac, frame, @intFromEnum(@import("../syntax/eth.zig").EtherType.IPv4));
+        iface.send(dmac, frame, @intFromEnum(eth.EtherType.IPv4));
     }
 }
 

@@ -1,10 +1,10 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const syntax = @import("../syntax/tcp.zig");
+const syntax = @import("../syntax.zig");
 const ipv4 = @import("../core/ipv4.zig");
 
-pub const TcpHeader = syntax.TcpHeader;
-pub const TcpFlags = syntax.TcpFlags;
+pub const TcpHeader = syntax.tcp.TcpHeader;
+pub const TcpFlags = syntax.tcp.TcpFlags;
 
 fn seqLessThan(a: u32, b: u32) bool {
     return (@as(i32, @intCast(a)) - @as(i32, @intCast(b))) < 0;
@@ -235,7 +235,7 @@ pub const TcpControlBlock = struct {
             slot.len = upper_start + slot.data.len;
 
             const checksum = ipv4.calcPseudoChecksum(slot.data, .TCP, iface.ip_addr, self.daddr);
-            @memcpy(slot.header[upper_start + @offsetOf(TcpHeader, "checksum")..][0..2], std.mem.asBytes(&checksum));
+            @memcpy(slot.header[upper_start + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
             ipv4.send(iface, self.daddr, slot, .TCP);
             self.snd_nxt +%= payload.len;
@@ -305,8 +305,14 @@ pub const TcpControlBlock = struct {
                 }
             },
             .SYN_RECEIVED => {
-                if (header.flags.rst == 1) { self.state = .LISTEN; return; }
-                if (header.flags.syn == 1) { self.state = .LISTEN; return; }
+                if (header.flags.rst == 1) {
+                    self.state = .LISTEN;
+                    return;
+                }
+                if (header.flags.syn == 1) {
+                    self.state = .LISTEN;
+                    return;
+                }
                 if (header.flags.ack == 1) {
                     if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
                         self.snd_wnd = seg_wnd;
@@ -317,7 +323,10 @@ pub const TcpControlBlock = struct {
                 }
             },
             .ESTABLISHED => {
-                if (header.flags.rst == 1) { self.state = .CLOSED; return; }
+                if (header.flags.rst == 1) {
+                    self.state = .CLOSED;
+                    return;
+                }
                 if (header.flags.syn == 1) {}
                 if (header.flags.ack == 1) {
                     if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
@@ -337,7 +346,9 @@ pub const TcpControlBlock = struct {
                 }
                 self.sendAck();
             },
-            .CLOSE_WAIT => { if (header.flags.rst == 1) {} },
+            .CLOSE_WAIT => {
+                if (header.flags.rst == 1) {}
+            },
             .FIN_WAIT_1 => {
                 if (header.flags.rst == 1) self.state = .CLOSED;
                 if (header.flags.ack == 1) {
@@ -347,8 +358,14 @@ pub const TcpControlBlock = struct {
             },
             .FIN_WAIT_2 => {},
             .LAST_ACK => {
-                if (header.flags.rst == 1) { self.state = .CLOSED; return; }
-                if (header.flags.ack == 1) { self.state = .CLOSED; return; }
+                if (header.flags.rst == 1) {
+                    self.state = .CLOSED;
+                    return;
+                }
+                if (header.flags.ack == 1) {
+                    self.state = .CLOSED;
+                    return;
+                }
             },
             else => {},
         }
@@ -387,7 +404,7 @@ pub const TcpControlBlock = struct {
         slot.len = upper_start + slot.data.len;
 
         const checksum = ipv4.calcPseudoChecksum(slot.data, .TCP, iface.ip_addr, self.daddr);
-        @memcpy(slot.header[upper_start + @offsetOf(TcpHeader, "checksum")..][0..2], std.mem.asBytes(&checksum));
+        @memcpy(slot.header[upper_start + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
         ipv4.send(iface, self.daddr, slot, .TCP);
     }

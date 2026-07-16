@@ -1,9 +1,11 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const syntax = @import("../syntax/arp.zig");
+const syntax = @import("../syntax.zig");
+const arp = syntax.arp;
+const eth = syntax.eth;
 
-pub const ArpFrame = syntax.ArpFrame;
-pub const Opcode = syntax.Opcode;
+pub const ArpFrame = arp.ArpFrame;
+pub const Opcode = arp.Opcode;
 
 pub fn addArpEntry(iface: *types.Interface, addr: u32, mac: [6]u8) void {
     const table = iface.arp_table;
@@ -24,9 +26,9 @@ pub fn fetchArpEntry(iface: *types.Interface, addr: u32) ?[6]u8 {
 }
 
 pub fn processARPFrame(iface: *types.Interface, buffer: []u8) void {
-    const eth_hdr = std.mem.bytesToValue(@import("../syntax/eth.zig").EthernetHeader, buffer[0..@sizeOf(@import("../syntax/eth.zig").EthernetHeader)]);
-    const payload = buffer[@sizeOf(@import("../syntax/eth.zig").EthernetHeader)..];
-    const recv_header: ArpFrame = syntax.readFrame(payload);
+    const eth_hdr = std.mem.bytesToValue(eth.EthernetHeader, buffer[0..@sizeOf(eth.EthernetHeader)]);
+    const payload = buffer[@sizeOf(eth.EthernetHeader)..];
+    const recv_header: ArpFrame = arp.readFrame(payload);
 
     if (recv_header.tipaddr == iface.ip_addr) {
         const resp_header: ArpFrame = .{
@@ -38,15 +40,15 @@ pub fn processARPFrame(iface: *types.Interface, buffer: []u8) void {
         };
 
         if (iface.requestFrame()) |frame| {
-            const eth_type = @import("../syntax/eth.zig").EtherType.ARP;
-            const eth_resp: @import("../syntax/eth.zig").EthernetHeader = .{
+            const eth_type = eth.EtherType.ARP;
+            const eth_resp: eth.EthernetHeader = .{
                 .dest = recv_header.shwaddr,
                 .src = iface.mac_addr,
                 .len_or_type = std.mem.nativeToBig(u16, @intFromEnum(eth_type)),
             };
 
             var pos: usize = 0;
-            var end: usize = @sizeOf(@import("../syntax/eth.zig").EthernetHeader);
+            var end: usize = @sizeOf(eth.EthernetHeader);
             @memcpy(frame.buffer[pos..end], std.mem.asBytes(&eth_resp));
 
             pos = end;

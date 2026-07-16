@@ -3,14 +3,7 @@ const std = @import("std");
 pub const time = @import("time.zig");
 pub const types = @import("types.zig");
 
-pub const syntax = struct {
-    pub const eth = @import("syntax/eth.zig");
-    pub const arp = @import("syntax/arp.zig");
-    pub const ipv4 = @import("syntax/ipv4.zig");
-    pub const icmp = @import("syntax/icmp.zig");
-    pub const udp = @import("syntax/udp.zig");
-    pub const tcp = @import("syntax/tcp.zig");
-};
+pub const syntax = @import("syntax.zig");
 
 pub const core = struct {
     pub const arp = @import("core/arp.zig");
