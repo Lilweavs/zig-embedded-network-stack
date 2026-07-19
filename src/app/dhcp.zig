@@ -124,6 +124,7 @@ pub const DhcpClient = struct {
     discover_time: u32 = 0,
     magic_number: u32 = 0,
     server_addr: u32 = 0,
+    ntp_server: u32 = 0,
     subnet_mask: u32 = 0,
     broadcast_address: u32 = 0,
     requested_addr: u32 = 0,
@@ -284,6 +285,10 @@ pub const DhcpClient = struct {
                     },
                     .ServerIdentifier => {
                         self.server_addr = std.mem.bytesToValue(u32, option.payload);
+                    },
+                    .NTPServers => {
+                        self.ntp_server = std.mem.bytesToValue(u32, option.payload[0..4]);
+                        logger.debug("NTP Server: {f}\n", .{ipv4.fmtIpAddr(self.ntp_server)});
                     },
                     else => {},
                 }
