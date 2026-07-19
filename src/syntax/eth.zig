@@ -14,17 +14,20 @@ pub const EtherType = enum(u16) {
 
 const MacAddr = struct {
     mac: [6]u8,
-    pub fn format(self: MacAddr, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-        try std.fmt.format(writer, "{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}", .{
-            self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5],
+    pub fn format(self: MacAddr, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print("{X:02}:{X:02}:{X:02}:{X:02}:{X:02}:{X:02}", .{
+            self.mac[0],
+            self.mac[1],
+            self.mac[2],
+            self.mac[3],
+            self.mac[4],
+            self.mac[5],
         });
     }
 };
 
-pub fn fmtMacAddr(mac: [6]u8) std.fmt.Formatter(MacAddr.format) {
-    return .{ .data = MacAddr{ .mac = mac } };
+pub fn fmtMacAddr(mac: [6]u8) MacAddr {
+    return .{ .mac = mac };
 }
 
 pub fn readHeader(buffer: []const u8) EthernetHeader {
