@@ -3,9 +3,12 @@ const types = @import("../types.zig");
 const syntax = @import("../syntax.zig");
 const arp = syntax.arp;
 const eth = syntax.eth;
+const ipv4 = syntax.ipv4;
 
 pub const ArpFrame = arp.ArpFrame;
 pub const Opcode = arp.Opcode;
+
+const logger = std.log.scoped(.arp);
 
 pub fn addArpEntry(iface: *types.Interface, addr: u32, mac: [6]u8) void {
     const table = iface.arp_table;
@@ -21,8 +24,29 @@ pub fn fetchArpEntry(iface: *types.Interface, addr: u32) ?[6]u8 {
     const table = iface.arp_table;
     return for (0..table.len) |i| {
         if (table[i].valid == false) break null;
-        if (table[i].ip_addr == addr) break table[i].mac;
+        if (table[i].ip_addr == addr) {
+            logger.debug("ARP: Fetch {f} -> {f}\n", .{ ipv4.fmtIpAddr(addr), eth.fmtMacAddr(table[i].mac) });
+            break table[i].mac;
+        }
     } else null;
+}
+
+pub fn arpDiscover(iface: *types.Interface, tipaddr: u32) void {
+    logger.debug("ARP: Discover {f}\n", .{ipv4.fmtIpAddr(tipaddr)});
+    if (iface.requestFrame()) |frame| {
+        const header: ArpFrame = .{
+            .opcode = std.mem.nativeToBig(u16, @intFromEnum(Opcode.Request)),
+            .shwaddr = iface.mac_addr,
+            .sipaddr = iface.ip_addr,
+            .tipaddr = std.mem.nativeToBig(u32, tipaddr),
+        };
+
+        const pos: usize = types.NET_HEADER_OFFSET;
+        const end: usize = pos + @sizeOf(ArpFrame);
+        @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
+
+        iface.send(.{ 0, 0, 0, 0, 0, 0 }, frame, @intFromEnum(syntax.eth.EtherType.ARP));
+    }
 }
 
 pub fn processARPFrame(iface: *types.Interface, buffer: []u8) void {
@@ -40,23 +64,14 @@ pub fn processARPFrame(iface: *types.Interface, buffer: []u8) void {
         };
 
         if (iface.requestFrame()) |frame| {
-            const eth_type = eth.EtherType.ARP;
-            const eth_resp: eth.EthernetHeader = .{
-                .dest = recv_header.shwaddr,
-                .src = iface.mac_addr,
-                .len_or_type = std.mem.nativeToBig(u16, @intFromEnum(eth_type)),
-            };
+            logger.debug("ARP: Receive {f} -> {f}\n", .{ ipv4.fmtIpAddr(recv_header.sipaddr), eth.fmtMacAddr(recv_header.shwaddr) });
 
-            var pos: usize = 0;
-            var end: usize = @sizeOf(eth.EthernetHeader);
-            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&eth_resp));
-
-            pos = end;
-            end = pos + @sizeOf(ArpFrame);
+            const pos = types.NET_HEADER_OFFSET;
+            const end = pos + @sizeOf(ArpFrame);
             @memcpy(frame.buffer[pos..end], std.mem.asBytes(&resp_header));
 
             frame.len = end;
-            iface.send(recv_header.shwaddr, frame, @intFromEnum(eth_type));
+            iface.send(recv_header.shwaddr, frame, @intFromEnum(eth.EtherType.ARP));
         }
 
         if (fetchArpEntry(iface, recv_header.sipaddr)) |_| {} else {
