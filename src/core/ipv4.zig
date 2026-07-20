@@ -41,11 +41,14 @@ pub fn send(iface: *types.Interface, daddr: u32, frame: *types.Frame, proto: Pro
 
     // if we are a braodcast address we can skip the arp lookup
     if (header.daddr == IP_BROADCAST_ADDR) {
-        iface.send(.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, frame, @intFromEnum(eth.EtherType.IPv4));
+        return iface.send(.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, frame, @intFromEnum(eth.EtherType.IPv4));
     }
 
     if (arp.fetchArpEntry(iface, daddr)) |dmac| {
         iface.send(dmac, frame, @intFromEnum(eth.EtherType.IPv4));
+    } else {
+        iface.returnFrame(frame);
+        arp.arpDiscover(iface, daddr);
     }
 }
 

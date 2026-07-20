@@ -13,6 +13,13 @@ pub const ArpEntry = struct {
     valid: bool = false,
 };
 
+pub const ArpPendingEntry = struct {
+    target_ip: u32 = 0,
+    first_seen: u32 = 0,
+    retries: u32 = 0,
+    valid: bool = false,
+};
+
 pub const Frame = struct {
     buffer: []u8 = &.{},
     len: usize = 0,
@@ -95,6 +102,7 @@ pub const Interface = struct {
     tx_queue: FrameQueue = .{},
     device: Device = undefined,
     arp_table: []ArpEntry = &.{},
+    arp_pending: []ArpPendingEntry = &.{},
 
     const Self = @This();
 
@@ -104,6 +112,10 @@ pub const Interface = struct {
 
     pub fn requestFrame(self: *Self) ?*Frame {
         return self.tx_queue.requestFrame();
+    }
+
+    pub fn returnFrame(self: *Self, frame: *Frame) void {
+        return self.tx_queue.returnFrame(frame);
     }
 
     pub fn send(self: *Self, dst_mac: [6]u8, frame: *Frame, ethertype: u16) void {
