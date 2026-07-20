@@ -78,11 +78,13 @@ pub const UDPSocket = struct {
     pub fn send(self: *Self, iface: *types.Interface, dip_addr: u32, port: u16, frame: *types.Frame) void {
         const base_idx = types.TRANSPORT_HEADER_OFFSET;
 
-        const header = createUDPHeader(self.port, port, @intCast(frame.len), 0x0000);
+        const header = createUDPHeader(self.port, port, @intCast(frame.len + @sizeOf(UDPHeader)), 0x0000);
         @memcpy(frame.buffer[base_idx..][0..@sizeOf(UDPHeader)], std.mem.asBytes(&header));
 
-        const checksum = ipv4.calcPseudoChecksum(frame.buffer[base_idx..][0..frame.len], .UDP, 0, dip_addr);
+        const checksum = ipv4.calcPseudoChecksum(frame.buffer[base_idx..][0..@intCast(frame.len + @sizeOf(UDPHeader))], .UDP, 0, dip_addr);
         @memcpy(frame.buffer[base_idx + @offsetOf(UDPHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+
+        frame.len += @sizeOf(UDPHeader);
 
         ipv4.send(iface, dip_addr, frame, .UDP);
     }

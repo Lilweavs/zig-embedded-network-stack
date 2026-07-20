@@ -229,7 +229,7 @@ pub const DhcpClient = struct {
 
                 frame.buffer[end] = @intFromEnum(DHCPOptions.End);
 
-                frame.len = @sizeOf(udp.UDPHeader) + (end + 1 - dhcp_start);
+                frame.len = (end + 1 - dhcp_start);
 
                 switch (msg) {
                     .Renew => s.send(self.iface, self.server_addr, server_port, frame),
