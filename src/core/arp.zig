@@ -38,14 +38,14 @@ pub fn arpDiscover(iface: *types.Interface, tipaddr: u32) void {
             .opcode = std.mem.nativeToBig(u16, @intFromEnum(Opcode.Request)),
             .shwaddr = iface.mac_addr,
             .sipaddr = iface.ip_addr,
-            .tipaddr = std.mem.nativeToBig(u32, tipaddr),
+            .tipaddr = tipaddr,
         };
 
         const pos: usize = types.NET_HEADER_OFFSET;
         const end: usize = pos + @sizeOf(ArpFrame);
         @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
-        iface.send(.{ 0, 0, 0, 0, 0, 0 }, frame, @intFromEnum(syntax.eth.EtherType.ARP));
+        iface.send(.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }, frame, @intFromEnum(syntax.eth.EtherType.ARP));
     }
 }
 
