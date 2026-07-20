@@ -16,6 +16,7 @@ pub const core = struct {
 
 pub const app = struct {
     pub const dhcp = @import("app/dhcp.zig");
+    pub const ntp = @import("app/ntp.zig");
 };
 
 pub const iface = struct {
