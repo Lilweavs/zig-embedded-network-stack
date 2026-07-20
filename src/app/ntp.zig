@@ -26,9 +26,7 @@ const NtpHeader = extern struct {
 };
 
 const NtpStatus = enum {
-    WaitingForArp,
     UnSynchronized,
-    FirstPass,
     Synchronized,
 };
 
@@ -55,13 +53,6 @@ pub const NtpClient = struct {
 
     pub fn poll(self: *Self) void {
         switch (self.state) {
-            .WaitingForArp => {
-                if (arp.fetchArpEntry(self.iface, self.server_addr)) |_| {
-                    self.state = .UnSynchronized;
-                } else {
-                    arp.arpDiscover(self.iface, self.server_addr);
-                }
-            },
             else => self.ntpSyncRequest(),
         }
     }
@@ -70,14 +61,15 @@ pub const NtpClient = struct {
         const sock = self.socket orelse return;
         const frame = self.iface.requestFrame() orelse return;
 
-        const now: u32 = time.millis();
-        const seconds: u32 = time.millis() / 1000;
-        const fraction: u32 = @intCast(((@as(u64, now % 1000) << 32) / 1000));
+        logger.debug("NTP: Sync request\n", .{});
 
-        const transmit_time: u64 = std.mem.nativeToBig(u64, ((@as(u64, seconds) << 32) | @as(u64, fraction)) + self.ntp_offset);
+        const now: u32 = time.millis();
+        const seconds: u32 = now / 1000;
+        const fraction: u32 = @intCast(((@as(u64, now % 1000) << 32) / 1000));
+        const transmit_time: u64 = ((@as(u64, seconds) << 32) | @as(u64, fraction)) + self.ntp_offset;
 
         const header: NtpHeader = .{
-            .transmit_timestamp = transmit_time,
+            .transmit_timestamp = std.mem.nativeToBig(u64, transmit_time),
         };
 
         const pos: usize = types.TRANSPORT_HEADER_OFFSET + @sizeOf(udp.UDPHeader);
@@ -96,10 +88,10 @@ pub const NtpClient = struct {
         _ = iface;
 
         const now: u32 = time.millis();
-        const seconds: u32 = time.millis() / 1000;
+        const seconds: u32 = now / 1000;
         const fraction: u32 = @intCast(((@as(u64, now % 1000) << 32) / 1000));
 
-        const hrx: u64 = (@as(u64, seconds) << 32) | @as(u64, fraction); // i.e. receive_time of client
+        const hrx: u64 = (@as(u64, seconds) << 32) | @as(u64, fraction) + self.ntp_offset; // i.e. receive_time of client
 
         const header = std.mem.bytesAsValue(NtpHeader, payload[0..@sizeOf(NtpHeader)]);
 
@@ -107,13 +99,17 @@ pub const NtpClient = struct {
         const stx: u64 = std.mem.bigToNative(u64, header.transmit_timestamp);
         const htx: u64 = std.mem.bigToNative(u64, header.origin_timestamp);
 
-        printUnixTimestamp(htx);
+        if (self.state == .UnSynchronized) {
+            printUnixTimestamp(htx);
+        } else printNtpTimestamp(htx);
         printNtpTimestamp(srx);
         printNtpTimestamp(stx);
-        printUnixTimestamp(hrx);
-
         if (self.state == .UnSynchronized) {
-            self.ntp_offset = stx;
+            printUnixTimestamp(htx);
+        } else printNtpTimestamp(hrx);
+        if (self.state == .UnSynchronized) {
+            self.state = .Synchronized;
+            self.ntp_offset = stx - hrx;
         } else {
             const d1 = @as(i64, @bitCast(srx)) - @as(i64, @bitCast(htx));
             const d2 = @as(i64, @bitCast(hrx)) - @as(i64, @bitCast(stx));
