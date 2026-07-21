@@ -38,6 +38,9 @@ pub const NtpClient = struct {
     ntp_offset: u64 = 0,
     server_addr: u32 = 0,
     state: NtpStatus = .UnSynchronized,
+    poll_interval: u32 = 10 * std.time.us_per_ms, // 10s
+    num_polls: u32 = 0,
+    timer: u32 = 0,
 
     pub fn init(self: *Self, iface: *types.Interface) error{PortInUse}!void {
         self.iface = iface;
@@ -52,8 +55,10 @@ pub const NtpClient = struct {
     }
 
     pub fn poll(self: *Self) void {
-        switch (self.state) {
-            else => self.ntpSyncRequest(),
+        const now = time.millis();
+        if (now > self.timer) {
+            self.timer += self.poll_interval;
+            self.ntpSyncRequest();
         }
     }
 
@@ -91,7 +96,8 @@ pub const NtpClient = struct {
         const seconds: u32 = now / 1000;
         const fraction: u32 = @intCast(((@as(u64, now % 1000) << 32) / 1000));
 
-        const hrx: u64 = (@as(u64, seconds) << 32) | @as(u64, fraction) + self.ntp_offset; // i.e. receive_time of client
+        const system_time: u64 = (@as(u64, seconds) << 32) | @as(u64, fraction);
+        const hrx: u64 = system_time + self.ntp_offset;
 
         const header = std.mem.bytesAsValue(NtpHeader, payload[0..@sizeOf(NtpHeader)]);
 
@@ -105,19 +111,37 @@ pub const NtpClient = struct {
         printNtpTimestamp(srx);
         printNtpTimestamp(stx);
         if (self.state == .UnSynchronized) {
-            printUnixTimestamp(htx);
+            printUnixTimestamp(hrx);
         } else printNtpTimestamp(hrx);
+
         if (self.state == .UnSynchronized) {
             self.state = .Synchronized;
-            self.ntp_offset = stx - hrx;
+            self.ntp_offset = stx - system_time;
         } else {
             const d1 = @as(i64, @bitCast(srx)) - @as(i64, @bitCast(htx));
-            const d2 = @as(i64, @bitCast(hrx)) - @as(i64, @bitCast(stx));
+            const d2 = @as(i64, @bitCast(stx)) - @as(i64, @bitCast(hrx));
 
             const offset = @divTrunc(d1 + d2, 2); // average the two offsets
-
+            if (offset > 0) {
+                self.ntp_offset += @as(u64, @intCast(offset));
+            } else {
+                self.ntp_offset -= @as(u64, @intCast(-offset));
+            }
             printOffset(offset);
-            // printNtpTimestamp(@intCast(offset));
+
+            const abs = @abs(offset);
+
+            const microseconds = @divTrunc((abs & 0xFFFFFFFF) * 1000000, 1 << 32);
+            if (microseconds < 2_000) {
+                self.num_polls += 1;
+            } else {
+                self.num_polls = 0;
+            }
+            if (self.num_polls > 5) {
+                self.poll_interval = 300 * std.time.us_per_ms;
+            } else {
+                self.poll_interval = 60 * std.time.us_per_ms;
+            }
         }
     }
 };
@@ -155,13 +179,16 @@ pub fn printUnixTimestamp(utc_timestamp: u64) void {
     );
 }
 
-pub fn printOffset(timestamp: i64) void {
-    const seconds: i32 = @intCast(timestamp >> 32);
-    const milliseconds: u32 = @truncate((@as(u64, @bitCast(timestamp & 0xFFFFFFFF)) * 1000) >> 32);
+pub fn printOffset(offset: i64) void {
+    const abs = @abs(offset);
 
-    logger.debug("{d}.{d}\n", .{
+    const seconds = abs >> 32;
+    const microseconds = @divTrunc((abs & 0xFFFFFFFF) * 1000000, 1 << 32);
+    const sign: u8 = if (offset < 0) '-' else '+';
+    logger.debug("{c}{d}.{d:06}\n", .{
+        sign,
         seconds,
-        milliseconds,
+        microseconds,
     });
 }
 
