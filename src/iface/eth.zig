@@ -30,7 +30,7 @@ pub fn ethProcess(dev: *EthDevice, iface: *types.Interface, buffer: []u8) void {
     if (protocol >= 1536) {
         switch (@as(syntax.eth.EtherType, @enumFromInt(protocol))) {
             .IPv4 => ipv4.processIPv4Frame(iface, buffer[types.NET_HEADER_OFFSET..]),
-            .ARP => arp.processARPFrame(iface, buffer),
+            .ARP => arp.processARPFrame(iface, buffer[types.NET_HEADER_OFFSET..]),
             _ => {},
         }
     }
