@@ -53,9 +53,40 @@ pub fn send(iface: *types.Interface, daddr: u32, frame: *types.Frame, proto: Pro
 }
 
 pub fn processIPv4Frame(iface: *types.Interface, buffer: []u8) void {
+    if (buffer.len < @sizeOf(IPv4Header)) {
+        logger.debug("IPV4: packet too short\n", .{});
+        return;
+    }
+
     const header: IPv4Header = std.mem.bytesToValue(IPv4Header, buffer[0..@sizeOf(IPv4Header)]);
+
+    const ihl = header.version_ihl.ihl;
+    if (header.version_ihl.version != 4 or header.version_ihl.ihl < 5) {
+        logger.debug("IPV4: Invalid version or IHL {d}\n", .{@as(u8, @bitCast(header.version_ihl))});
+        return; // invalid packet
+    }
+
+    const header_len = @as(usize, ihl) * 4;
     const length: usize = @intCast(std.mem.bigToNative(u16, header.length));
-    const header_len = @as(usize, header.version_ihl.ihl) * 4;
+
+    if (length > buffer.len) {
+        logger.debug("IPV4: Packet overflows buffer\n", .{});
+        return;
+    }
+
+    const frag: ipv4.FragmentField = @bitCast(std.mem.bigToNative(u16, header.flags_offset));
+    const flags = frag.flags;
+
+    if (frag.offset != 0 or flags.mf == 1) {
+        logger.debug("IPV4: fragment not supported\n", .{});
+        return;
+    }
+
+    if (ipv4.calculateChecksum(buffer[0..header_len], 0) != 0) {
+        logger.debug("IPV4: checksum failed\n", .{});
+        return;
+    }
+
     const payload = buffer[header_len..length];
 
     if (protocol_handlers[header.protocol]) |handler| {

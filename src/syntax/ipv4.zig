@@ -32,6 +32,17 @@ pub const IPv4Header = extern struct {
     }
 };
 
+pub const FragmentField = packed struct(u16) {
+    offset: u13,
+    flags: Flags,
+};
+
+pub const Flags = packed struct(u3) {
+    mf: u1,
+    df: u1,
+    r: u1,
+};
+
 pub const Protocol = enum(u8) {
     ICMP = 1,
     IGMP = 2,
