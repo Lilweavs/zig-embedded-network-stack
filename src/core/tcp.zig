@@ -204,7 +204,9 @@ pub const TcpControlBlock = struct {
 
     pub fn recv(self: *Self, buffer: []u8) usize {
         if (self.rx_buffer.availableSpace() == 0) return 0;
-        return self.rx_buffer.copy(buffer);
+        const bytes_read = self.rx_buffer.copy(buffer);
+        self.rcv_wnd += @intCast(bytes_read);
+        return bytes_read;
     }
 
     pub fn send(self: *Self, payload: []const u8) void {
@@ -329,6 +331,8 @@ pub const TcpControlBlock = struct {
                 if (header.flags.syn == 1) {}
                 if (header.flags.ack == 1) {
                     if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
+                        const bytes_acked = seg_ack -% self.snd_una;
+                        self.tx_buffer.remove(bytes_acked);
                         self.snd_una = seg_ack;
                         return;
                     }
@@ -351,7 +355,6 @@ pub const TcpControlBlock = struct {
             .FIN_WAIT_1 => {
                 if (header.flags.rst == 1) self.state = .CLOSED;
                 if (header.flags.ack == 1) {
-                    self.sendInternal(.{ .fin = 1, .ack = 1 }, &.{});
                     self.state = .FIN_WAIT_2;
                 }
             },
