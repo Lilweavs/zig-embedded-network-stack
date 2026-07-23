@@ -24,8 +24,8 @@ pub fn processICMPPacket(iface: *types.Interface, saddr: u32, buffer: []u8) void
 }
 
 pub fn pingEcho(iface: *types.Interface, ping_addr: u32) void {
-    if (iface.requestSlot()) |slot| {
-        const upper_start: usize = types.TRANSPORT_HEADER_OFFSET;
+    if (iface.requestFrame()) |frame| {
+        const sidx: usize = types.TRANSPORT_HEADER_OFFSET;
 
         const header: PingHeader = .{
             .type = .Echo,
@@ -33,28 +33,27 @@ pub fn pingEcho(iface: *types.Interface, ping_addr: u32) void {
             .sequence_numer = sequnce_number,
         };
 
-        var pos: usize = upper_start;
+        var pos: usize = sidx;
         var end: usize = pos + @sizeOf(PingHeader);
-        @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
+        @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
         pos = end;
         end = pos + icmp_magic_string.len;
-        @memcpy(slot.header[pos..end], icmp_magic_string);
+        @memcpy(frame.buffer[pos..end], icmp_magic_string);
 
-        slot.data = slot.header[upper_start..end];
-        slot.len = upper_start + slot.data.len;
+        frame.len = end - sidx;
 
-        const checksum = ipv4.calculateIPv4Checksum(slot.data, 0);
-        @memcpy(slot.header[upper_start + @offsetOf(PingHeader, "checksum")..][0..2], std.mem.asBytes(&checksum));
+        const checksum = ipv4.calculateIPv4Checksum(frame.buffer[sidx..end], 0);
+        @memcpy(frame.buffer[sidx + @offsetOf(PingHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-        ipv4.send(iface, ping_addr, slot, .ICMP);
+        ipv4.send(iface, ping_addr, frame, .ICMP);
     }
 }
 
 pub fn pingReply(iface: *types.Interface, addr: u32, payload: []u8) void {
     const resp_header = std.mem.bytesToValue(PingHeader, payload[0..@sizeOf(PingHeader)]);
-    if (iface.requestSlot()) |slot| {
-        const upper_start: usize = types.TRANSPORT_HEADER_OFFSET;
+    if (iface.requestFrame()) |frame| {
+        const sidx: usize = types.TRANSPORT_HEADER_OFFSET;
 
         const header: PingHeader = .{
             .type = .Reply,
@@ -62,17 +61,16 @@ pub fn pingReply(iface: *types.Interface, addr: u32, payload: []u8) void {
             .sequence_number = resp_header.sequence_number,
         };
 
-        var pos: usize = upper_start;
+        var pos: usize = sidx;
         var end: usize = pos + @sizeOf(PingHeader);
-        @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
+        @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
         pos = end;
         end = pos + (payload.len - @sizeOf(PingHeader));
-        @memcpy(slot.header[pos..end], payload[@sizeOf(PingHeader)..]);
+        @memcpy(frame.buffer[pos..end], payload[@sizeOf(PingHeader)..]);
 
-        slot.data = slot.header[upper_start..end];
-        slot.len = upper_start + slot.data.len;
+        frame.len = end - sidx;
 
-        ipv4.send(iface, addr, slot, .ICMP);
+        ipv4.send(iface, addr, frame, .ICMP);
     }
 }

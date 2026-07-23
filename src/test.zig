@@ -55,11 +55,10 @@ test "loopback device send/recv" {
 
     const test_data = [_]u8{ 0x45, 0x00, 0x00, 0x20, 0x00, 0x01, 0x00, 0x00, 0x40, 0x06, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x01, 0x7F, 0x00, 0x00, 0x01 };
     {
-        const slot = iface.requestSlot().?;
-        @memcpy(slot.header[0..test_data.len], &test_data);
-        slot.len = test_data.len;
-        slot.data = slot.header[0..slot.len];
-        iface.send(.{0} ** 6, slot, 0x0800);
+        const frame = iface.requestFrame().?;
+        @memcpy(frame.buffer[0..test_data.len], &test_data);
+        frame.len = test_data.len;
+        iface.send(.{0} ** 6, frame, 0x0800);
     }
 
     const recvd = iface.recv();

@@ -211,7 +211,7 @@ pub const TcpControlBlock = struct {
         const iface = self.iface.?;
         _ = self.tx_buffer.store(payload);
 
-        if (iface.requestSlot()) |slot| {
+        if (iface.requestFrame()) |frame| {
             var header = TcpHeader{
                 .sport = std.mem.nativeToBig(u16, self.port),
                 .dport = std.mem.nativeToBig(u16, self.sport),
@@ -222,22 +222,21 @@ pub const TcpControlBlock = struct {
                 .window = std.mem.nativeToBig(u16, self.rcv_wnd),
             };
 
-            const upper_start: usize = types.TRANSPORT_HEADER_OFFSET;
-            var pos: usize = upper_start;
+            const sidx: usize = types.TRANSPORT_HEADER_OFFSET;
+            var pos: usize = sidx;
             var end: usize = pos + @sizeOf(TcpHeader);
-            @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
+            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
             pos = end;
             end = pos + payload.len;
-            @memcpy(slot.header[pos..end], payload);
+            @memcpy(frame.buffer[pos..end], payload);
 
-            slot.data = slot.header[upper_start..end];
-            slot.len = upper_start + slot.data.len;
+            frame.len = end - sidx;
 
-            const checksum = ipv4.calcPseudoChecksum(slot.data, .TCP, iface.ip_addr, self.daddr);
-            @memcpy(slot.header[upper_start + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+            const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
+            @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-            ipv4.send(iface, self.daddr, slot, .TCP);
+            ipv4.send(iface, self.daddr, frame, .TCP);
             self.snd_nxt +%= payload.len;
         }
     }
@@ -380,7 +379,7 @@ pub const TcpControlBlock = struct {
 
     fn sendInternal(self: *Self, flags: TcpFlags, payload: []u8) void {
         const iface = self.iface.?;
-        const slot = iface.requestSlot() orelse return;
+        const frame = iface.requestFrame() orelse return;
 
         var header = TcpHeader{
             .sport = std.mem.nativeToBig(u16, self.port),
@@ -392,21 +391,20 @@ pub const TcpControlBlock = struct {
             .window = std.mem.nativeToBig(u16, self.rcv_wnd),
         };
 
-        const upper_start: usize = types.TRANSPORT_HEADER_OFFSET;
-        var pos: usize = upper_start;
+        const sidx: usize = types.TRANSPORT_HEADER_OFFSET;
+        var pos: usize = sidx;
         var end: usize = pos + @sizeOf(TcpHeader);
-        @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
+        @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
         pos = end;
         end = pos + payload.len;
 
-        slot.data = slot.header[upper_start..end];
-        slot.len = upper_start + slot.data.len;
+        frame.len = end - sidx;
 
-        const checksum = ipv4.calcPseudoChecksum(slot.data, .TCP, iface.ip_addr, self.daddr);
-        @memcpy(slot.header[upper_start + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+        const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
+        @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-        ipv4.send(iface, self.daddr, slot, .TCP);
+        ipv4.send(iface, self.daddr, frame, .TCP);
     }
 
     pub fn sendAck(self: *Self) void {
@@ -423,7 +421,7 @@ pub const TcpControlBlock = struct {
     pub fn sendSynAck(self: *Self) void {
         const iface = self.iface.?;
         self.checkWindowUpdate();
-        if (iface.requestSlot()) |slot| {
+        if (iface.requestFrame()) |frame| {
             var header = TcpHeader{
                 .sport = std.mem.nativeToBig(u16, self.port),
                 .dport = std.mem.nativeToBig(u16, self.sport),
@@ -434,18 +432,16 @@ pub const TcpControlBlock = struct {
                 .window = std.mem.nativeToBig(u16, self.rcv_wnd),
             };
 
-            const upper_start: usize = types.TRANSPORT_HEADER_OFFSET;
-            const pos: usize = upper_start;
+            const pos: usize = types.TRANSPORT_HEADER_OFFSET;
             var end: usize = pos + @sizeOf(TcpHeader);
-            @memcpy(slot.header[pos..end], std.mem.asBytes(&header));
+            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
 
-            addMtuOption(slot.header[end..], self.mss);
+            addMtuOption(frame.buffer[end..], self.mss);
             end += 4;
 
-            slot.data = slot.header[upper_start..end];
-            slot.len = upper_start + slot.data.len;
+            frame.len = end - pos;
 
-            ipv4.send(iface, self.daddr, slot, .TCP);
+            ipv4.send(iface, self.daddr, frame, .TCP);
         }
     }
 };
