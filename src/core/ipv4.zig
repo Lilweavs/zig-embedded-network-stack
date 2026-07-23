@@ -47,8 +47,7 @@ pub fn send(iface: *types.Interface, daddr: u32, frame: *types.Frame, proto: Pro
     if (arp.fetchArpEntry(iface, daddr)) |dmac| {
         iface.send(dmac, frame, @intFromEnum(eth.EtherType.IPv4));
     } else {
-        iface.returnFrame(frame);
-        arp.arpDiscover(iface, daddr);
+        arp.arpDiscover(iface, daddr, frame);
     }
 }
 

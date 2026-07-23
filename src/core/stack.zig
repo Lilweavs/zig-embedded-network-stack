@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("../types.zig");
+const arp = @import("../core/arp.zig");
 const ipv4 = @import("../core/ipv4.zig");
 const icmp = @import("../core/icmp.zig");
 const udp = @import("../core/udp.zig");
@@ -21,12 +22,14 @@ pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, co
 
         interfaces: [iface_count]types.Interface = undefined,
         arp_backing: [iface_count][arp_entries]types.ArpEntry = undefined,
+        arp_pending_backing: [iface_count][arp_entries]types.ArpPendingEntry = undefined,
 
         pub fn init(self: *Self) void {
             time.set(cfg.millis);
 
-            for (&self.interfaces, &self.arp_backing) |*iface, *backing| {
-                iface.arp_table = backing;
+            for (&self.interfaces, &self.arp_backing, &self.arp_pending_backing) |*iface, *arpBacking, *pendingBacking| {
+                iface.arp_table = arpBacking;
+                iface.arp_pending = pendingBacking;
                 iface.init();
             }
 
@@ -45,6 +48,7 @@ pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, co
 
         pub fn poll(self: *Self) void {
             for (&self.interfaces) |*iface| {
+                arp.processPending(iface);
                 while (iface.recv()) |frame| {
                     iface.processFrame(frame);
                 }

@@ -15,9 +15,9 @@ pub const ArpEntry = struct {
 
 pub const ArpPendingEntry = struct {
     target_ip: u32 = 0,
+    frame: ?*Frame = null,
     first_seen: u32 = 0,
     retries: u32 = 0,
-    valid: bool = false,
 };
 
 pub const Frame = struct {
