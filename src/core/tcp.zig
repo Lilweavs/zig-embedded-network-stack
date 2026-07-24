@@ -129,6 +129,7 @@ pub const TcpSocket = struct {
     irs: u32 = 0,
 
     mss: u16 = 576 - 40,
+    wnd_update_pending: bool = false,
 
     const Self = @This();
 
@@ -163,13 +164,8 @@ pub const TcpSocket = struct {
 
     pub fn recv(self: *Self, buffer: []u8) usize {
         if (self.rx_buffer.availableSpace() == 0) return 0;
-        const prev_wnd = self.rcv_wnd;
         const bytes_read = self.rx_buffer.copy(buffer);
         self.rcv_wnd += @intCast(bytes_read);
-
-        if (self.rcv_wnd >= self.mss or prev_wnd == 0) {
-            self.sendAck();
-        }
         return bytes_read;
     }
 
@@ -204,6 +200,7 @@ pub const TcpSocket = struct {
 
             ipv4.send(iface, self.daddr, frame, .TCP);
             self.snd_nxt +%= payload.len;
+            self.wnd_update_pending = false;
         }
     }
 
@@ -311,14 +308,14 @@ pub const TcpSocket = struct {
                         const bytes_acked = seg_ack -% self.snd_una;
                         self.tx_buffer.remove(bytes_acked);
                         self.snd_una = seg_ack;
-                        return;
                     }
-                } else return;
+                }
                 if (header.flags.urg == 1) {}
                 if (segment.len > 0) {
                     const num_acked = self.rx_buffer.store(segment);
                     self.rcv_nxt +%= @as(u32, @intCast(num_acked));
                     self.rcv_wnd -= @intCast(num_acked);
+                    self.wnd_update_pending = true;
                     self.emitEvent(.data, segment);
                 }
                 if (header.flags.fin == 1) {
@@ -326,7 +323,9 @@ pub const TcpSocket = struct {
                     self.state = .CLOSE_WAIT;
                     self.emitEvent(.closed, &.{});
                 }
-                self.sendAck();
+                if (self.wnd_update_pending) {
+                    self.sendAck();
+                }
             },
             .CLOSE_WAIT => {
                 if (header.flags.rst == 1) {}
@@ -451,6 +450,7 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
             }
         }
 
+        sock.wnd_update_pending = false;
         sock.receive(sport, saddr, buffer);
         return;
     }
