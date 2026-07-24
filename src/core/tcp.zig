@@ -81,38 +81,13 @@ const TcpBuffer = struct {
     }
 };
 
-pub var server = TcpServer{};
+pub const Event = enum {
+    connected,
+    data,
+    closed,
+};
 
-pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
-    const header: TcpHeader = std.mem.bytesToValue(TcpHeader, buffer[0..@sizeOf(TcpHeader)]);
-
-    const dport = std.mem.bigToNative(u16, header.dport);
-
-    if (server.port == dport) {
-        if (header.flags.syn == 1 and header.flags.ack == 0) {
-            if (allocControlBlock()) |*tcb| {
-                tcb.*.iface = iface;
-                tcb.*.port = server.port;
-                tcb.*.sport = std.mem.bigToNative(u16, header.sport);
-                tcb.*.daddr = saddr;
-                tcb.*.state = .LISTEN;
-            }
-        }
-
-        for (&control_blocks) |*tcb| {
-            if (tcb.state == .CLOSED) return else tcb.receive(std.mem.bigToNative(u16, header.sport), saddr, buffer);
-        }
-    }
-}
-
-fn allocControlBlock() ?*TcpControlBlock {
-    for (&control_blocks) |*tcb| {
-        if (tcb.state == .CLOSED) {
-            return tcb;
-        }
-    }
-    return null;
-}
+pub const EventFn = *const fn (socket: *TcpSocket, event: Event, data: []const u8) void;
 
 pub const State = enum {
     LISTEN,
@@ -128,33 +103,15 @@ pub const State = enum {
     CLOSED,
 };
 
-pub const TcpServer = struct {
-    port: u16 = 0,
-    active: bool = false,
-
-    const Self = @This();
-
-    pub fn bind(self: *Self, port: u16) void {
-        self.port = port;
-    }
-
-    pub fn listen(self: *Self) void {
-        _ = self;
-    }
-};
-
-pub var control_blocks = [_]TcpControlBlock{TcpControlBlock{}} ** 4;
-
-pub const TcpControlBlock = struct {
+pub const TcpSocket = struct {
     iface: ?*types.Interface = null,
     state: State = .CLOSED,
-    seq_number: u32 = 0,
-    ack_number: u32 = 0,
     port: u16 = 0,
     sport: u16 = 0,
     daddr: u32 = 0,
     active: bool = false,
-    recv_callback: ?TcpCallbackFn = null,
+    recv_callback: ?EventFn = null,
+    context: ?*anyopaque = null,
     rx_buffer: TcpBuffer = TcpBuffer{},
     tx_buffer: TcpBuffer = TcpBuffer{},
 
@@ -179,33 +136,40 @@ pub const TcpControlBlock = struct {
         return self.state;
     }
 
-    pub fn open() void {}
+    pub fn bind(self: *Self, port: u16, callback: ?EventFn, context: ?*anyopaque) void {
+        self.port = port;
+        self.recv_callback = callback;
+        self.context = context;
+        self.active = true;
+    }
 
-    pub fn connect(self: *Self, iface: *types.Interface) void {
-        self.iface = iface;
-        self.iss = generateInitialSequenceNumber();
-        self.snd_nxt = self.iss;
-        self.snd_una = self.iss;
-        self.sendInternal(.{ .syn = 1 }, &.{});
-        self.state = .SYN_SENT;
-        self.snd_nxt +%= 1;
+    pub fn listen(self: *Self) void {
+        self.state = .LISTEN;
     }
 
     pub fn close(self: *Self) void {
         switch (self.state) {
+            .ESTABLISHED => {
+                self.sendInternal(.{ .fin = 1, .ack = 1 }, &.{});
+                self.state = .FIN_WAIT_1;
+            },
             .CLOSE_WAIT => {
                 self.sendInternal(.{ .fin = 1, .ack = 1 }, &.{});
                 self.state = .LAST_ACK;
             },
-            .ESTABLISHED => {},
             else => {},
         }
     }
 
     pub fn recv(self: *Self, buffer: []u8) usize {
         if (self.rx_buffer.availableSpace() == 0) return 0;
+        const prev_wnd = self.rcv_wnd;
         const bytes_read = self.rx_buffer.copy(buffer);
         self.rcv_wnd += @intCast(bytes_read);
+
+        if (self.rcv_wnd >= self.mss or prev_wnd == 0) {
+            self.sendAck();
+        }
         return bytes_read;
     }
 
@@ -247,6 +211,12 @@ pub const TcpControlBlock = struct {
         return self.rx_buffer.size;
     }
 
+    fn emitEvent(self: *Self, event: Event, data: []const u8) void {
+        if (self.recv_callback) |cb| {
+            cb(self, event, data);
+        }
+    }
+
     pub fn receive(self: *Self, sport: u16, saddr: u32, payload: []const u8) void {
         _ = sport;
         _ = saddr;
@@ -265,7 +235,11 @@ pub const TcpControlBlock = struct {
                     self.state = .LISTEN;
                     return;
                 },
-                .ESTABLISHED, .FIN_WAIT_1, .FIN_WAIT_2, .CLOSE_WAIT => {},
+                .ESTABLISHED, .FIN_WAIT_1, .FIN_WAIT_2, .CLOSE_WAIT => {
+                    self.emitEvent(.closed, &.{});
+                    self.state = .CLOSED;
+                    return;
+                },
                 else => {
                     self.state = .CLOSED;
                     return;
@@ -302,6 +276,7 @@ pub const TcpControlBlock = struct {
                     if (seqGreaterThan(self.snd_una, self.iss)) {
                         self.state = .ESTABLISHED;
                         self.sendInternal(.{ .ack = 1 }, &.{});
+                        self.emitEvent(.connected, &.{});
                     }
                 }
             },
@@ -320,11 +295,13 @@ pub const TcpControlBlock = struct {
                         self.snd_wl1 = seg_seq;
                         self.snd_wl2 = seg_ack;
                         self.state = .ESTABLISHED;
+                        self.emitEvent(.connected, &.{});
                     }
                 }
             },
             .ESTABLISHED => {
                 if (header.flags.rst == 1) {
+                    self.emitEvent(.closed, &.{});
                     self.state = .CLOSED;
                     return;
                 }
@@ -342,10 +319,12 @@ pub const TcpControlBlock = struct {
                     const num_acked = self.rx_buffer.store(segment);
                     self.rcv_nxt +%= @as(u32, @intCast(num_acked));
                     self.rcv_wnd -= @intCast(num_acked);
+                    self.emitEvent(.data, segment);
                 }
                 if (header.flags.fin == 1) {
                     self.rcv_nxt +%= 1;
                     self.state = .CLOSE_WAIT;
+                    self.emitEvent(.closed, &.{});
                 }
                 self.sendAck();
             },
@@ -370,13 +349,6 @@ pub const TcpControlBlock = struct {
                 }
             },
             else => {},
-        }
-    }
-
-    fn checkWindowUpdate(self: *Self) void {
-        if (self.rx_buffer.availableSpace() -| self.rcv_wnd >= @min(self.rx_buffer.data.len, self.mss)) {
-            const num_mss_segments: u16 = @intCast(self.rx_buffer.availableSpace() / self.mss);
-            self.rcv_wnd += self.mss * num_mss_segments;
         }
     }
 
@@ -411,7 +383,6 @@ pub const TcpControlBlock = struct {
     }
 
     pub fn sendAck(self: *Self) void {
-        self.checkWindowUpdate();
         self.sendInternal(.{ .ack = 1 }, &.{});
     }
 
@@ -423,7 +394,6 @@ pub const TcpControlBlock = struct {
 
     pub fn sendSynAck(self: *Self) void {
         const iface = self.iface.?;
-        self.checkWindowUpdate();
         if (iface.requestFrame()) |frame| {
             var header = TcpHeader{
                 .sport = std.mem.nativeToBig(u16, self.port),
@@ -450,31 +420,42 @@ pub const TcpControlBlock = struct {
 };
 
 const tcp_pool_size: usize = 4;
-var tcp_pool: [tcp_pool_size]TcpControlBlock = .{TcpControlBlock{}} ** tcp_pool_size;
+pub var tcp_pool: [tcp_pool_size]TcpSocket = .{TcpSocket{}} ** tcp_pool_size;
 
-const TcpCallbackFn = *const fn (socket: *TcpControlBlock, addr: u32, port: u16, payload: []const u8) void;
-
-pub fn requestSocketFromPool() ?*TcpControlBlock {
-    for (0..tcp_pool.len) |i| {
-        if (tcp_pool[i].active == false) {
-            tcp_pool[i].active = true;
-            return &tcp_pool[i];
+pub fn requestSocket() ?*TcpSocket {
+    for (&tcp_pool) |*sock| {
+        if (!sock.active) {
+            return sock;
         }
     }
     return null;
 }
 
-pub fn returnSocketToPool(socket: *TcpControlBlock) void {
-    for (0..tcp_pool.len) |i| {
-        if (&tcp_pool[i] == socket) {}
+pub fn returnSocket(socket: *TcpSocket) void {
+    socket.* = .{};
+}
+
+pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
+    const header: TcpHeader = std.mem.bytesToValue(TcpHeader, buffer[0..@sizeOf(TcpHeader)]);
+    const dport = std.mem.bigToNative(u16, header.dport);
+    const sport = std.mem.bigToNative(u16, header.sport);
+
+    for (&tcp_pool) |*sock| {
+        if (!sock.active or sock.port != dport) continue;
+
+        if (sock.state == .LISTEN) {
+            if (header.flags.syn == 1 and header.flags.ack == 0) {
+                sock.iface = iface;
+                sock.sport = sport;
+                sock.daddr = saddr;
+            }
+        }
+
+        sock.receive(sport, saddr, buffer);
+        return;
     }
-    socket.active = false;
 }
 
 pub fn generateInitialSequenceNumber() u32 {
-    return 100;
-}
-
-pub fn generateInitialAcknowledgeNumber() u32 {
     return 100;
 }
