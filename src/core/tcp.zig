@@ -7,19 +7,19 @@ pub const TcpHeader = syntax.tcp.TcpHeader;
 pub const TcpFlags = syntax.tcp.TcpFlags;
 
 fn seqLessThan(a: u32, b: u32) bool {
-    return (@as(i32, @intCast(a)) - @as(i32, @intCast(b))) < 0;
+    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) < 0;
 }
 
 fn seqLessThanEqual(a: u32, b: u32) bool {
-    return (@as(i32, @intCast(a)) - @as(i32, @intCast(b))) <= 0;
+    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) <= 0;
 }
 
 fn seqGreaterThan(a: u32, b: u32) bool {
-    return (@as(i32, @intCast(a)) - @as(i32, @intCast(b))) > 0;
+    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) > 0;
 }
 
 fn seqGreaterThanEqual(a: u32, b: u32) bool {
-    return (@as(i32, @intCast(a)) - @as(i32, @intCast(b))) >= 0;
+    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) >= 0;
 }
 
 const TcpBuffer = struct {
