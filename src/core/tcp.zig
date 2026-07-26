@@ -578,9 +578,10 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
     const dport = std.mem.bigToNative(u16, header.dport);
     const sport = std.mem.bigToNative(u16, header.sport);
 
-    const checksum = syntax.ipv4.calculateChecksum(buffer, syntax.ipv4.getPsuedoHeaderChecksum(.TCP, saddr, iface.ip_addr, @intCast(buffer.len)));
+    const checksum = ipv4.calcPseudoChecksum(buffer, .TCP, saddr, iface.ip_addr);
+
     if (checksum != 0) {
-        logger.debug("TCP: checksum failed\n", .{});
+        logger.debug("TCP: invalid checksum\n", .{});
         return;
     }
 
@@ -603,4 +604,12 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
 
 pub fn generateInitialSequenceNumber() u32 {
     return 100;
+}
+
+test "checksum" {
+    const tcp_packet: [47]u8 = .{ 0x9c, 0x88, 0x1b, 0x58, 0x99, 0x5b, 0x84, 0x6f, 0x9a, 0x99, 0xb0, 0x25, 0x80, 0x18, 0x00, 0x40, 0x05, 0x2e, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a, 0xef, 0xa6, 0x5b, 0xbb, 0x94, 0xd1, 0x27, 0x5e, 'H', 'e', 'l', 'l', 'o', ',', ' ', 'W', 'o', 'r', 'l', 'd', '!', '\r', '\n' };
+
+    const checksum = syntax.ipv4.calcPseudoChecksum(&tcp_packet, .TCP, std.mem.bigToNative(u32, 0x7f000001), std.mem.bigToNative(u32, 0x7f000001));
+
+    try std.testing.expectEqual(0x0000, checksum);
 }
