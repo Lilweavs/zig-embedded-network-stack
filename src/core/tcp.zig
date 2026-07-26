@@ -345,7 +345,12 @@ pub const TcpSocket = struct {
                     self.state = .CLOSED;
                     return;
                 }
-                if (header.flags.syn == 1) {}
+                if (header.flags.syn == 1) {
+                    self.sendInternal(.{ .rst = 1 }, &.{});
+                    self.emitEvent(.closed, &.{});
+                    self.state = .CLOSED;
+                    return;
+                }
                 if (header.flags.ack == 1) {
                     if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
                         const bytes_acked = seg_ack -% self.snd_una;
