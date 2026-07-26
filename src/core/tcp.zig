@@ -377,7 +377,24 @@ pub const TcpSocket = struct {
                 }
             },
             .CLOSE_WAIT => {
-                if (header.flags.rst == 1) {}
+                if (header.flags.ack == 1) {
+                    if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
+                        const bytes_acked = seg_ack -% self.snd_una;
+                        self.tx_buffer.remove(bytes_acked);
+                        self.snd_una = seg_ack;
+                    }
+                }
+                if (segment.len > 0) {
+                    if (seg_seq == self.rcv_nxt) {
+                        const num_acked = self.rx_buffer.store(segment);
+                        self.rcv_nxt +%= @as(u32, @intCast(num_acked));
+                        self.rcv_wnd -= @intCast(num_acked);
+                        self.wnd_update_pending = true;
+                    }
+                }
+                if (self.wnd_update_pending) {
+                    self.sendAck();
+                }
             },
             .FIN_WAIT_1 => {
                 if (header.flags.rst == 1) self.state = .CLOSED;
