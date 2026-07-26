@@ -194,6 +194,8 @@ pub const TcpSocket = struct {
     }
 
     pub fn send(self: *Self, payload: []const u8) void {
+        if (!(self.state == .ESTABLISHED or self.state == .CLOSE_WAIT)) return;
+
         _ = self.tx_buffer.store(payload);
         self.sendSegment(payload);
     }
@@ -498,7 +500,7 @@ pub const TcpSocket = struct {
             const checksum = ipv4.calcPseudoChecksum(frame.buffer[pos..end], .TCP, iface.ip_addr, self.daddr);
             @memcpy(frame.buffer[pos + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-        ipv4.send(iface, self.daddr, frame, .TCP);
+            ipv4.send(iface, self.daddr, frame, .TCP);
         }
     }
 };
