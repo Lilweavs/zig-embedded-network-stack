@@ -122,6 +122,40 @@ pub const State = enum {
     CLOSED,
 };
 
+const TcpOptions = enum(u8) {
+    End = 0,
+    Nop = 1,
+    MSS = 2,
+    _,
+};
+
+const OptionPayload = struct {
+    code: TcpOptions,
+    payload: []const u8,
+};
+
+const OptionIterator = struct {
+    const Self = @This();
+    buffer: []const u8,
+    index: usize = 0,
+
+    pub fn next(self: *Self) ?OptionPayload {
+        const code = @as(TcpOptions, @enumFromInt(self.buffer[self.index]));
+
+        while (self.index > self.buffer.len) {
+            if (code == .End) break;
+            if (code == .Nop) {
+                self.index += 1;
+            }
+            const length = self.buffer[self.index + 1];
+            self.index += 2 + length;
+
+            return .{ .code = code, .payload = self.buffer[self.index - length .. self.index] };
+        }
+        return null;
+    }
+};
+
 pub const TcpSocket = struct {
     iface: ?*types.Interface = null,
     state: State = .CLOSED,
@@ -147,8 +181,8 @@ pub const TcpSocket = struct {
     rcv_up: u32 = 0,
     irs: u32 = 0,
 
-    // mss: u16 = 576 - 40,
     mss: u16 = 1460,
+    peer_mss: u16 = 1460,
     wnd_update_pending: bool = false,
 
     const Self = @This();
@@ -207,7 +241,7 @@ pub const TcpSocket = struct {
         if (unsent == 0) return;
 
         const frame = iface.requestFrame() orelse return;
-        const to_send = @min(unsent, @as(usize, self.mss));
+        const to_send = @min(unsent, @as(usize, self.peer_mss));
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
         _ = self.tx_buffer.peek(self.bytesNotAcked(), frame.buffer[sidx..][0..to_send]);
         self.sendFrame(iface, frame, to_send);
@@ -297,9 +331,19 @@ pub const TcpSocket = struct {
                 if (header.flags.syn == 1) {
                     self.rcv_nxt = seg_seq +% 1;
                     self.irs = seg_seq;
-                    self.sendSynAck();
                     self.snd_una = std.mem.bigToNative(u32, header.seq_number);
                     self.snd_nxt = self.snd_una +% 1;
+                    self.sendSynAck();
+                    if (@sizeOf(TcpHeader) != end_of_header) {
+                        var opt_iter: OptionIterator = .{ .buffer = payload[@sizeOf(TcpHeader)..end_of_header] };
+                        while (opt_iter.next()) |opt| switch (opt.code) {
+                            .MSS => {
+                                self.peer_mss = std.mem.bigToNative(u16, std.mem.bytesToValue(u16, opt.payload[2..]));
+                                logger.debug("TCP: Peer MSS -> {d}\n", .{self.peer_mss});
+                            },
+                            else => {},
+                        };
+                    }
                     self.state = .SYN_RECEIVED;
                 }
             },
