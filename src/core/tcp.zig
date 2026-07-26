@@ -6,6 +6,8 @@ const ipv4 = @import("../core/ipv4.zig");
 pub const TcpHeader = syntax.tcp.TcpHeader;
 pub const TcpFlags = syntax.tcp.TcpFlags;
 
+const logger = std.log.scoped(.tcp);
+
 fn seqLessThan(a: u32, b: u32) bool {
     return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) < 0;
 }
@@ -79,6 +81,23 @@ const TcpBuffer = struct {
     fn availableBytes(self: Self) usize {
         return self.size;
     }
+
+    pub fn peek(self: *Self, offset: usize, buf: []u8) usize {
+        const avail = self.size -| offset;
+        const bytes_to_read = @min(avail, buf.len);
+        if (bytes_to_read == 0) return 0;
+
+        const start = (self.head + offset) % capacity;
+        const avail_chunk = capacity - start;
+
+        if (bytes_to_read <= avail_chunk) {
+            @memcpy(buf[0..bytes_to_read], self.data[start..][0..bytes_to_read]);
+        } else {
+            @memcpy(buf[0..avail_chunk], self.data[start..][0..avail_chunk]);
+            @memcpy(buf[avail_chunk..bytes_to_read], self.data[0..][0 .. bytes_to_read - avail_chunk]);
+        }
+        return bytes_to_read;
+    }
 };
 
 pub const Event = enum {
@@ -128,10 +147,15 @@ pub const TcpSocket = struct {
     rcv_up: u32 = 0,
     irs: u32 = 0,
 
-    mss: u16 = 576 - 40,
+    // mss: u16 = 576 - 40,
+    mss: u16 = 1460,
     wnd_update_pending: bool = false,
 
     const Self = @This();
+
+    inline fn bytesNotAcked(self: Self) usize {
+        return self.snd_nxt -% self.snd_una;
+    }
 
     pub fn status(self: *Self) State {
         return self.state;
@@ -163,45 +187,63 @@ pub const TcpSocket = struct {
     }
 
     pub fn recv(self: *Self, buffer: []u8) usize {
-        if (self.rx_buffer.availableSpace() == 0) return 0;
+        if (self.rx_buffer.availableBytes() == 0) return 0;
         const bytes_read = self.rx_buffer.copy(buffer);
         self.rcv_wnd += @intCast(bytes_read);
         return bytes_read;
     }
 
     pub fn send(self: *Self, payload: []const u8) void {
-        const iface = self.iface.?;
         _ = self.tx_buffer.store(payload);
+        self.sendSegment(payload);
+    }
 
-        if (iface.requestFrame()) |frame| {
-            var header = TcpHeader{
-                .sport = std.mem.nativeToBig(u16, self.port),
-                .dport = std.mem.nativeToBig(u16, self.sport),
-                .seq_number = std.mem.nativeToBig(u32, self.snd_nxt),
-                .ack_number = std.mem.nativeToBig(u32, self.rcv_nxt),
-                .data_offset = 0x50,
-                .flags = .{ .ack = 1, .psh = 1 },
-                .window = std.mem.nativeToBig(u16, self.rcv_wnd),
-            };
+    pub fn flush(self: *Self) void {
+        const iface = self.iface orelse return;
+        std.debug.assert(self.tx_buffer.availableBytes() >= self.bytesNotAcked());
+        const unsent = self.tx_buffer.availableBytes() - self.bytesNotAcked();
+        if (unsent == 0) return;
 
-            const sidx: usize = types.TRANSPORT_HEADER_OFFSET;
-            var pos: usize = sidx;
-            var end: usize = pos + @sizeOf(TcpHeader);
-            @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
+        const frame = iface.requestFrame() orelse return;
+        const to_send = @min(unsent, @as(usize, self.mss));
+        const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
+        _ = self.tx_buffer.peek(self.bytesNotAcked(), frame.buffer[sidx..][0..to_send]);
+        self.sendFrame(iface, frame, to_send);
+    }
 
-            pos = end;
-            end = pos + payload.len;
-            @memcpy(frame.buffer[pos..end], payload);
+    fn sendSegment(self: *Self, data: []const u8) void {
+        const iface = self.iface orelse return;
+        const frame = iface.requestFrame() orelse return;
 
-            frame.len = end - sidx;
+        const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
+        @memcpy(frame.buffer[sidx..][0..data.len], data);
+        self.sendFrame(iface, frame, data.len);
+    }
 
-            const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
-            @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+    fn sendFrame(self: *Self, iface: *types.Interface, frame: *types.Frame, data_len: usize) void {
+        var header = TcpHeader{
+            .sport = std.mem.nativeToBig(u16, self.port),
+            .dport = std.mem.nativeToBig(u16, self.sport),
+            .seq_number = std.mem.nativeToBig(u32, self.snd_nxt),
+            .ack_number = std.mem.nativeToBig(u32, self.rcv_nxt),
+            .data_offset = 0x50,
+            .flags = .{ .ack = 1, .psh = 1 },
+            .window = std.mem.nativeToBig(u16, self.rcv_wnd),
+        };
 
-            ipv4.send(iface, self.daddr, frame, .TCP);
-            self.snd_nxt +%= payload.len;
-            self.wnd_update_pending = false;
-        }
+        const sidx = types.TRANSPORT_HEADER_OFFSET;
+        const pos = sidx + @sizeOf(TcpHeader);
+        const end = pos + data_len;
+
+        @memcpy(frame.buffer[sidx..pos], std.mem.asBytes(&header));
+        frame.len = end - sidx;
+
+        const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
+        @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+
+        ipv4.send(iface, self.daddr, frame, .TCP);
+        self.snd_nxt +%= data_len;
+        self.wnd_update_pending = false;
     }
 
     pub fn available(self: Self) usize {
@@ -312,6 +354,7 @@ pub const TcpSocket = struct {
                 }
                 if (header.flags.urg == 1) {}
                 if (segment.len > 0) {
+                    logger.debug("TCP: bytes received {d}\n", .{segment.len});
                     const num_acked = self.rx_buffer.store(segment);
                     self.rcv_nxt +%= @as(u32, @intCast(num_acked));
                     self.rcv_wnd -= @intCast(num_acked);
@@ -379,6 +422,10 @@ pub const TcpSocket = struct {
         @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
         ipv4.send(iface, self.daddr, frame, .TCP);
+
+        if (flags.fin == 1 or flags.syn == 1) {
+            self.snd_nxt +%= 1;
+        }
     }
 
     pub fn sendAck(self: *Self) void {
@@ -413,7 +460,10 @@ pub const TcpSocket = struct {
 
             frame.len = end - pos;
 
-            ipv4.send(iface, self.daddr, frame, .TCP);
+            const checksum = ipv4.calcPseudoChecksum(frame.buffer[pos..end], .TCP, iface.ip_addr, self.daddr);
+            @memcpy(frame.buffer[pos + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+
+        ipv4.send(iface, self.daddr, frame, .TCP);
         }
     }
 };
@@ -432,6 +482,12 @@ pub fn requestSocket() ?*TcpSocket {
 
 pub fn returnSocket(socket: *TcpSocket) void {
     socket.* = .{};
+}
+
+pub fn flushAll() void {
+    for (&tcp_pool) |*sock| {
+        if (sock.active) sock.flush();
+    }
 }
 
 pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
