@@ -379,7 +379,14 @@ pub const TcpSocket = struct {
                     self.state = .FIN_WAIT_2;
                 }
             },
-            .FIN_WAIT_2 => {},
+            .FIN_WAIT_2 => {
+                if (header.flags.fin == 1) {
+                    self.rcv_nxt +%= 1;
+                    self.sendAck();
+                    self.emitEvent(.closed, &.{});
+                    self.state = .CLOSED;
+                }
+            },
             .LAST_ACK => {
                 if (header.flags.rst == 1) {
                     self.state = .CLOSED;
