@@ -572,9 +572,17 @@ pub fn flushAll() void {
 }
 
 pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
+    if (buffer.len < @sizeOf(TcpHeader)) return;
+
     const header: TcpHeader = std.mem.bytesToValue(TcpHeader, buffer[0..@sizeOf(TcpHeader)]);
     const dport = std.mem.bigToNative(u16, header.dport);
     const sport = std.mem.bigToNative(u16, header.sport);
+
+    const checksum = syntax.ipv4.calculateChecksum(buffer, syntax.ipv4.getPsuedoHeaderChecksum(.TCP, saddr, iface.ip_addr, @intCast(buffer.len)));
+    if (checksum != 0) {
+        logger.debug("TCP: checksum failed\n", .{});
+        return;
+    }
 
     for (&tcp_pool) |*sock| {
         if (!sock.active or sock.port != dport) continue;
