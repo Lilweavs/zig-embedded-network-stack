@@ -355,12 +355,17 @@ pub const TcpSocket = struct {
                 }
                 if (header.flags.urg == 1) {}
                 if (segment.len > 0) {
-                    logger.debug("TCP: bytes received {d}\n", .{segment.len});
-                    const num_acked = self.rx_buffer.store(segment);
-                    self.rcv_nxt +%= @as(u32, @intCast(num_acked));
-                    self.rcv_wnd -= @intCast(num_acked);
-                    self.wnd_update_pending = true;
-                    self.emitEvent(.data, segment);
+                    if (seg_seq == self.rcv_nxt) {
+                        logger.debug("TCP: bytes received {d}\n", .{segment.len});
+                        const num_acked = self.rx_buffer.store(segment);
+                        self.rcv_nxt +%= @as(u32, @intCast(num_acked));
+                        self.rcv_wnd -= @intCast(num_acked);
+                        self.wnd_update_pending = true;
+                        self.emitEvent(.data, segment);
+                    } else {
+                        logger.debug("TCP: dropping segment seq={d} expected={d}\n", .{ seg_seq, self.rcv_nxt });
+                        self.wnd_update_pending = true;
+                    }
                 }
                 if (header.flags.fin == 1) {
                     self.rcv_nxt +%= 1;
