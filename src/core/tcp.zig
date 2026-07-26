@@ -270,6 +270,7 @@ pub const TcpSocket = struct {
 
         if (header.flags.rst == 1) {
             switch (self.state) {
+                .LISTEN => return,
                 .SYN_RECEIVED => {
                     self.state = .LISTEN;
                     return;
