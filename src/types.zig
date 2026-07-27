@@ -35,8 +35,11 @@ pub const FrameQueue = struct {
     tslots: std.DoublyLinkedList = .{},
 
     pub fn init(s: *Self) void {
+        s.fslots = .{};
+        s.tslots = .{};
         for (&s.frames, 0..) |*frame, i| {
             frame.buffer = &s.backing_buffers[i];
+            frame.node = .{};
             s.fslots.append(&frame.node);
         }
     }
@@ -123,7 +126,6 @@ pub const Interface = struct {
         // const loop_mod = @import("iface/loop.zig");
         switch (self.device) {
             .eth => |*d| eth_mod.ethSend(d, self, dst_mac, frame, ethertype),
-            // .loop => |*d| _ = d, // loop_mod.loopSend(d, self, dst_mac, frame, ethertype),
         }
         self.tx_queue.returnFrame(frame);
     }
@@ -133,7 +135,6 @@ pub const Interface = struct {
         // const loop_mod = @import("iface/loop.zig");
         return switch (self.device) {
             .eth => |*d| eth_mod.ethRecv(d),
-            // .loop => |*d| _ = d, // loop_mod.loopRecv(d),
         };
     }
 
@@ -142,7 +143,6 @@ pub const Interface = struct {
         // const loop_mod = @import("iface/loop.zig");
         switch (self.device) {
             .eth => |*d| eth_mod.ethProcess(d, self, buffer),
-            // .loop => |*d| _ = d, // loop_mod.loopProcess(d, self, buffer),
         }
     }
 };
