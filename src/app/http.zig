@@ -32,27 +32,33 @@ const HttpState = enum {
     Done,
 };
 
-var socket: *tcp.TcpSocket = undefined;
+var server: *tcp.TcpServer = undefined;
 
-pub fn init(sock: *tcp.TcpSocket) void {
-    socket = sock;
-    socket.bind(7000, processHttpFrame, null);
-    socket.listen();
+pub fn init() bool {
+    if (tcp.requestServer()) |srv| {
+        server = srv;
+        server.init(7000, serverEventCallback, 3, null);
+        return true;
+    }
+    return false;
+}
+
+fn serverEventCallback(srv: *tcp.TcpServer, event: tcp.ServerEvent) void {
+    _ = event;
+    while (srv.accept(processHttpFrame, null)) |_| {}
 }
 
 var http_buffer: [1460]u8 = undefined;
-pub fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8) void {
+fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8) void {
     switch (event) {
-        .closed => {
-            sock.state = .LISTEN; // look for more requests
-        },
+        .closed => {},
         .connected => {},
         .data => {
             logger.debug("HTTP Packet Received:\n{s}", .{data});
             var header: []const u8 = &.{};
             var content: []const u8 = &.{};
             if (std.mem.findPosLinear(u8, data, 0, "\r\n\r\n")) |idx| {
-                header = data[0 .. idx + 2]; // include the \r\n
+                header = data[0 .. idx + 2];
                 content = data[0 .. idx + 2][0..];
             }
 
@@ -60,7 +66,6 @@ pub fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8
             const state: HttpState = .ParseRequestType;
             var request_type: HttpRequestType = .GET;
             var request_path: []const u8 = &.{};
-            // first get the request type
             loop: switch (state) {
                 .ParseRequestType => {
                     const str = iter.next() orelse continue :loop .Invalid;
@@ -106,6 +111,7 @@ pub fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8
             }
 
             sock.send(http_buffer[0..length]);
+            sock.close();
         },
     }
 }
