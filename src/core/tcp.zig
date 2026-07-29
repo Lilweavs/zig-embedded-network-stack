@@ -9,19 +9,19 @@ pub const TcpFlags = syntax.tcp.TcpFlags;
 const logger = std.log.scoped(.tcp);
 
 fn seqLessThan(a: u32, b: u32) bool {
-    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) < 0;
+    return @as(i32, @bitCast(a -% b)) < 0;
 }
 
 fn seqLessThanEqual(a: u32, b: u32) bool {
-    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) <= 0;
+    return @as(i32, @bitCast(a -% b)) <= 0;
 }
 
 fn seqGreaterThan(a: u32, b: u32) bool {
-    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) > 0;
+    return @as(i32, @bitCast(a -% b)) > 0;
 }
 
 fn seqGreaterThanEqual(a: u32, b: u32) bool {
-    return (@as(i32, @bitCast(a)) - @as(i32, @bitCast(b))) >= 0;
+    return @as(i32, @bitCast(a -% b)) >= 0;
 }
 
 const TcpBuffer = struct {
@@ -165,7 +165,6 @@ pub const TcpSocket = struct {
     port: u16 = 0,
     sport: u16 = 0,
     daddr: u32 = 0,
-    active: bool = false,
     callback: ?EventFn = null,
     cb_context: ?*anyopaque = null,
     rx_buffer: TcpBuffer = TcpBuffer{},
@@ -583,8 +582,8 @@ pub fn requestServer() ?*TcpServer {
 }
 
 pub fn flushAll() void {
-    for (&tcp_pool) |*sock| {
-        if (sock.active) sock.flush();
+    for (&tcp_pool.items) |*sock| {
+        sock.flush();
     }
 }
 
@@ -618,7 +617,6 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
                     .port = dport,
                     .sport = sport,
                     .daddr = saddr,
-                    .active = true,
                     .rcv_nxt = std.mem.nativeToBig(u32, header.seq_number) +% 1,
                     .irs = std.mem.nativeToBig(u32, header.seq_number),
                 };
