@@ -396,6 +396,9 @@ pub const TcpSocket = struct {
                         self.wnd_update_pending = true;
                     }
                 }
+                if (segment.len == 0 and seqLessThan(seg_seq, self.rcv_nxt)) {
+                    self.sendAck();
+                }
                 if (header.flags.fin == 1) {
                     self.rcv_nxt +%= 1;
                     self.state = .CLOSE_WAIT;
@@ -424,6 +427,9 @@ pub const TcpSocket = struct {
                         self.rcv_wnd -= @intCast(num_acked);
                         self.wnd_update_pending = true;
                     }
+                }
+                if (segment.len == 0 and seqLessThan(seg_seq, self.rcv_nxt)) {
+                    self.sendAck();
                 }
                 if (self.wnd_update_pending) {
                     self.sendAck();
