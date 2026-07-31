@@ -104,6 +104,7 @@ pub const Event = enum {
     connected,
     data,
     closed,
+    tx_available,
 };
 
 pub const EventFn = *const fn (socket: *TcpSocket, event: Event, data: []const u8) void;
@@ -186,6 +187,7 @@ pub const TcpSocket = struct {
     mss: u16 = 1460,
     peer_mss: u16 = 1460,
     wnd_update_pending: bool = false,
+    tx_backlogged: bool = false,
 
     const Self = @This();
 
@@ -218,11 +220,20 @@ pub const TcpSocket = struct {
         return bytes_read;
     }
 
-    pub fn send(self: *Self, payload: []const u8) void {
-        if (!(self.state == .ESTABLISHED or self.state == .CLOSE_WAIT)) return;
+    pub fn send(self: *Self, data: []const u8) usize {
+        if (!(self.state == .ESTABLISHED or self.state == .CLOSE_WAIT)) return 0;
 
-        _ = self.tx_buffer.store(payload);
-        self.sendSegment(payload);
+        const stored = self.tx_buffer.store(data);
+        if (stored < data.len) self.tx_backlogged = true;
+        if (stored > 0) {
+            var offset: usize = 0;
+            while (offset < stored) {
+                const chunk_len = @min(stored - offset, @as(usize, self.peer_mss));
+                self.sendSegment(data[offset..][0..chunk_len]);
+                offset += chunk_len;
+            }
+        }
+        return stored;
     }
 
     pub fn flush(self: *Self) void {
@@ -365,6 +376,10 @@ pub const TcpSocket = struct {
                         const bytes_acked = seg_ack -% self.snd_una;
                         self.tx_buffer.remove(bytes_acked);
                         self.snd_una = seg_ack;
+                        if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
+                            self.tx_backlogged = false;
+                            self.emitEvent(.tx_available, &.{});
+                        }
                     }
                 }
                 if (header.flags.urg == 1) {}
@@ -396,6 +411,10 @@ pub const TcpSocket = struct {
                         const bytes_acked = seg_ack -% self.snd_una;
                         self.tx_buffer.remove(bytes_acked);
                         self.snd_una = seg_ack;
+                        if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
+                            self.tx_backlogged = false;
+                            self.emitEvent(.tx_available, &.{});
+                        }
                     }
                 }
                 if (segment.len > 0) {
