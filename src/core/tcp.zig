@@ -34,43 +34,49 @@ const TcpBuffer = struct {
     const capacity: usize = 4096;
 
     pub fn store(self: *Self, data: []const u8) usize {
-        if (self.availableSpace() < data.len) return 0;
-        const bytes_to_copy = data.len;
+        const bytes_to_copy = @min(data.len, self.availableSpace());
+        if (bytes_to_copy == 0) return 0;
 
-        const free_chunk: usize = capacity - self.tail;
-
+        const free_chunk = capacity - self.tail;
         if (bytes_to_copy <= free_chunk) {
-            @memcpy(@as([*]u8, @ptrCast(&self.data[self.tail])), data);
+            @memcpy(self.data[self.tail..][0..bytes_to_copy], data[0..bytes_to_copy]);
         } else {
-            @memcpy(@as([*]u8, @ptrCast(&self.data[self.tail])), data[0..free_chunk]);
-            @memcpy(@as([*]u8, @ptrCast(&self.data[0])), data[free_chunk..]);
+            @memcpy(self.data[self.tail..], data[0..free_chunk]);
+            @memcpy(self.data[0 .. bytes_to_copy - free_chunk], data[free_chunk..bytes_to_copy]);
         }
         self.tail = (self.tail + bytes_to_copy) % capacity;
         self.size += bytes_to_copy;
         return bytes_to_copy;
     }
 
-    pub fn copy(self: *Self, buffer: []u8) usize {
-        const bytes_to_read: usize = @min(self.size, buffer.len);
-        const avail_chunk: usize = capacity - self.head;
+    pub fn peek(self: *Self, offset: usize, buf: []u8) usize {
+        const bytes_to_read = @min(self.size -| offset, buf.len);
+        if (bytes_to_read == 0) return 0;
 
+        const start = (self.head + offset) % capacity;
+        const avail_chunk = capacity - start;
         if (bytes_to_read <= avail_chunk) {
-            @memcpy(buffer[0..bytes_to_read], @as([*]u8, @ptrCast(&self.data[self.head])));
+            @memcpy(buf[0..bytes_to_read], self.data[start..][0..bytes_to_read]);
         } else {
-            @memcpy(buffer[0..avail_chunk], @as([*]u8, @ptrCast(&self.data[self.head])));
-            @memcpy(buffer[avail_chunk..bytes_to_read], @as([*]u8, @ptrCast(&self.data[0])));
+            @memcpy(buf[0..avail_chunk], self.data[start..][0..avail_chunk]);
+            @memcpy(buf[avail_chunk..bytes_to_read], self.data[0 .. bytes_to_read - avail_chunk]);
         }
-        self.head = (self.head + bytes_to_read) % capacity;
-        self.size -= bytes_to_read;
         return bytes_to_read;
     }
 
-    pub fn remove(self: *Self, amount: u32) void {
-        self.size -|= amount;
+    pub fn copy(self: *Self, buffer: []u8) usize {
+        const bytes_to_read = self.peek(0, buffer);
+        self.consume(bytes_to_read);
+        return bytes_to_read;
+    }
+
+    pub fn consume(self: *Self, amount: usize) void {
+        const bytes_to_consume = @min(amount, self.size);
+        self.size -= bytes_to_consume;
         if (self.size == 0) {
             self.head = self.tail;
         } else {
-            self.head = (self.head + amount) % capacity;
+            self.head = (self.head + bytes_to_consume) % capacity;
         }
     }
 
@@ -80,23 +86,6 @@ const TcpBuffer = struct {
 
     fn availableBytes(self: Self) usize {
         return self.size;
-    }
-
-    pub fn peek(self: *Self, offset: usize, buf: []u8) usize {
-        const avail = self.size -| offset;
-        const bytes_to_read = @min(avail, buf.len);
-        if (bytes_to_read == 0) return 0;
-
-        const start = (self.head + offset) % capacity;
-        const avail_chunk = capacity - start;
-
-        if (bytes_to_read <= avail_chunk) {
-            @memcpy(buf[0..bytes_to_read], self.data[start..][0..bytes_to_read]);
-        } else {
-            @memcpy(buf[0..avail_chunk], self.data[start..][0..avail_chunk]);
-            @memcpy(buf[avail_chunk..bytes_to_read], self.data[0..][0 .. bytes_to_read - avail_chunk]);
-        }
-        return bytes_to_read;
     }
 };
 
@@ -374,7 +363,7 @@ pub const TcpSocket = struct {
                 if (header.flags.ack == 1) {
                     if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
                         const bytes_acked = seg_ack -% self.snd_una;
-                        self.tx_buffer.remove(bytes_acked);
+                        self.tx_buffer.consume(bytes_acked);
                         self.snd_una = seg_ack;
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
@@ -412,7 +401,7 @@ pub const TcpSocket = struct {
                 if (header.flags.ack == 1) {
                     if (seqLessThan(self.snd_una, seg_ack) and seqLessThanEqual(seg_ack, self.snd_nxt)) {
                         const bytes_acked = seg_ack -% self.snd_una;
-                        self.tx_buffer.remove(bytes_acked);
+                        self.tx_buffer.consume(bytes_acked);
                         self.snd_una = seg_ack;
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
