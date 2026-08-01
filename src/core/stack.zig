@@ -53,6 +53,7 @@ pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, co
                     iface.processFrame(frame);
                 }
             }
+            tcp.dispatchEvents();
         }
     };
 }

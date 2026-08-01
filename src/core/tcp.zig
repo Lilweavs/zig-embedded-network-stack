@@ -89,14 +89,15 @@ const TcpBuffer = struct {
     }
 };
 
-pub const Event = enum {
-    connected,
-    data,
-    closed,
-    tx_available,
+pub const Event = enum(usize) {
+    connected = 0,
+    data_received = 1,
+    tx_available = 2,
+    closed = 3,
+    err = 4,
 };
 
-pub const EventFn = *const fn (socket: *TcpSocket, event: Event, data: []const u8) void;
+pub const EventFn = *const fn (socket: *TcpSocket, ctx: ?*anyopaque, event: Event) void;
 
 pub const State = enum {
     LISTEN,
@@ -160,6 +161,16 @@ pub const TcpSocket = struct {
     rx_buffer: TcpBuffer = TcpBuffer{},
     tx_buffer: TcpBuffer = TcpBuffer{},
 
+    // pending_events: packed struct(u8) {
+    //     connected: u1 = 0,
+    //     data_received: u1 = 0,
+    //     tx_available: u1 = 0,
+    //     closed: u1 = 0,
+    //     err: u1 = 0,
+    // } = .{},
+    // pending_events: u8 = 0,
+    pending_events: std.StaticBitSet(8) = .initEmpty(),
+
     snd_una: u32 = 0,
     snd_nxt: u32 = 0,
     snd_wnd: u16 = 0,
@@ -202,10 +213,17 @@ pub const TcpSocket = struct {
         }
     }
 
+    pub fn setCallback(self: *Self, callback: EventFn, ctx: ?*anyopaque) void {
+        self.callback = callback;
+        self.cb_context = ctx;
+        if (self.rx_buffer.availableBytes() > 0) self.pushEvent(.data_received);
+    }
+
     pub fn recv(self: *Self, buffer: []u8) usize {
         if (self.rx_buffer.availableBytes() == 0) return 0;
         const bytes_read = self.rx_buffer.copy(buffer);
         self.rcv_wnd += @intCast(bytes_read);
+        self.wnd_update_pending = true;
         return bytes_read;
     }
 
@@ -277,10 +295,12 @@ pub const TcpSocket = struct {
         return self.rx_buffer.size;
     }
 
-    fn emitEvent(self: *Self, event: Event, data: []const u8) void {
-        if (self.callback) |cb| {
-            cb(self, event, data);
-        }
+    fn pushEvent(self: *Self, event: Event) void {
+        if (self.pending_events.isSet(@intFromEnum(event))) return;
+        event_queue.appendBounded(.{ .sock = self, .event = event }) catch {
+            // @panic(); // TODO: Think about a proper way to handle this
+            logger.debug("TCP: event queue full\n", .{});
+        };
     }
 
     pub fn receive(self: *Self, payload: []const u8) void {
@@ -295,7 +315,7 @@ pub const TcpSocket = struct {
         if (header.flags.rst == 1) {
             switch (self.state) {
                 .SYN_RECEIVED, .ESTABLISHED, .FIN_WAIT_1, .FIN_WAIT_2, .CLOSE_WAIT => {
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 },
@@ -324,18 +344,18 @@ pub const TcpSocket = struct {
                     if (seqGreaterThan(self.snd_una, self.iss)) {
                         self.state = .ESTABLISHED;
                         self.sendInternal(.{ .ack = 1 }, &.{});
-                        self.emitEvent(.connected, &.{});
+                        self.pushEvent(.connected);
                     }
                 }
             },
             .SYN_RECEIVED => {
                 if (header.flags.rst == 1) {
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 }
                 if (header.flags.syn == 1) {
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 }
@@ -350,13 +370,13 @@ pub const TcpSocket = struct {
             },
             .ESTABLISHED => {
                 if (header.flags.rst == 1) {
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 }
                 if (header.flags.syn == 1) {
                     self.sendInternal(.{ .rst = 1 }, &.{});
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 }
@@ -367,7 +387,7 @@ pub const TcpSocket = struct {
                         self.snd_una = seg_ack;
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
-                            self.emitEvent(.tx_available, &.{});
+                            self.pushEvent(.tx_available);
                         }
                     }
                 }
@@ -379,7 +399,7 @@ pub const TcpSocket = struct {
                         self.rcv_nxt +%= @as(u32, @intCast(num_acked));
                         self.rcv_wnd -= @intCast(num_acked);
                         self.wnd_update_pending = true;
-                        self.emitEvent(.data, segment);
+                        self.pushEvent(.data_received);
                     } else {
                         logger.debug("TCP: dropping segment seq={d} expected={d}\n", .{ seg_seq, self.rcv_nxt });
                         self.wnd_update_pending = true;
@@ -391,7 +411,7 @@ pub const TcpSocket = struct {
                 if (header.flags.fin == 1) {
                     self.rcv_nxt +%= 1;
                     self.state = .CLOSE_WAIT;
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.closed);
                 }
                 if (self.wnd_update_pending) {
                     self.sendAck();
@@ -405,7 +425,7 @@ pub const TcpSocket = struct {
                         self.snd_una = seg_ack;
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
-                            self.emitEvent(.tx_available, &.{});
+                            self.pushEvent(.tx_available);
                         }
                     }
                 }
@@ -415,6 +435,7 @@ pub const TcpSocket = struct {
                         self.rcv_nxt +%= @as(u32, @intCast(num_acked));
                         self.rcv_wnd -= @intCast(num_acked);
                         self.wnd_update_pending = true;
+                        self.pushEvent(.data_received);
                     }
                 }
                 if (segment.len == 0 and seqLessThan(seg_seq, self.rcv_nxt)) {
@@ -434,7 +455,7 @@ pub const TcpSocket = struct {
                 if (header.flags.fin == 1) {
                     self.rcv_nxt +%= 1;
                     self.sendAck();
-                    self.emitEvent(.closed, &.{});
+                    self.pushEvent(.closed);
                     self.state = .CLOSED;
                 }
             },
@@ -529,6 +550,14 @@ pub const TcpSocket = struct {
 var tcp_pool_backing_buffer: [tcp_pool_size]TcpSocket = .{TcpSocket{}} ** tcp_pool_size;
 var tcp_pool: std.ArrayList(TcpSocket) = .initBuffer(&tcp_pool_backing_buffer);
 
+const QueuedEvent = struct {
+    sock: *TcpSocket,
+    event: Event,
+};
+
+var event_queue_buf: [32]QueuedEvent = undefined;
+var event_queue: std.ArrayList(QueuedEvent) = .initBuffer(&event_queue_buf);
+
 pub fn requestSocket() ?*TcpSocket {
     return if (tcp_pool.addOneBounded()) |sock| sock else |_| null;
 }
@@ -542,37 +571,25 @@ pub fn returnSocket(socket: *TcpSocket) void {
     }
 }
 
-pub const ServerEvent = enum {
-    connected,
-};
-
-pub const ServerEventFn = *const fn (server: *TcpServer, event: ServerEvent) void;
-
 pub const TcpServer = struct {
     port: u16 = 0,
     active: bool = false,
-    event_callback: ?ServerEventFn = null,
-    context: ?*anyopaque = null,
     iface: ?*types.Interface = null,
     max_connections: usize = tcp_pool_size,
     connection_count: usize = 0,
 
     const Self = @This();
 
-    pub fn init(self: *Self, port: u16, callback: ?ServerEventFn, max_conns: usize, ctx: ?*anyopaque) void {
+    pub fn init(self: *Self, port: u16, max_conns: usize) void {
         self.port = port;
-        self.event_callback = callback;
-        self.context = ctx;
         self.max_connections = @min(max_conns, tcp_pool_size);
         self.active = true;
     }
 
-    pub fn accept(self: *Self, callback: EventFn, ctx: ?*anyopaque) ?*TcpSocket {
+    pub fn accept(self: *Self) ?*TcpSocket {
         for (accept_queue.items, 0..) |sock, i| {
-            if (sock.port == self.port and sock.state == .ESTABLISHED) {
+            if (sock.server == self) {
                 _ = accept_queue.swapRemove(i);
-                sock.callback = callback;
-                sock.cb_context = ctx;
                 return sock;
             }
         }
@@ -583,7 +600,7 @@ pub const TcpServer = struct {
 const tcp_server_pool_size: usize = 1;
 pub var tcp_server_pool: [tcp_server_pool_size]TcpServer = .{TcpServer{}} ** tcp_server_pool_size;
 
-var accept_queue_buf: [tcp_pool_size]*TcpSocket = undefined;
+var accept_queue_buf: [4]*TcpSocket = undefined;
 var accept_queue: std.ArrayList(*TcpSocket) = .initBuffer(&accept_queue_buf);
 
 pub fn requestServer() ?*TcpServer {
@@ -599,6 +616,18 @@ pub fn flushAll() void {
     for (&tcp_pool.items) |*sock| {
         sock.flush();
     }
+}
+
+pub fn dispatchEvents() void {
+    var i: usize = 0;
+    while (i < event_queue.items.len) : (i += 1) {
+        const item = event_queue.items[i];
+        if (item.sock.callback) |cb| {
+            item.sock.pending_events.unset(@intFromEnum(item.event));
+            cb(item.sock, item.sock.cb_context, item.event);
+        }
+    }
+    event_queue.clearRetainingCapacity();
 }
 
 pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
@@ -661,25 +690,19 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
     for (tcp_pool.items) |*sock| {
         if (sock.port != dport) continue;
         if (sock.sport != sport or sock.daddr != saddr) continue;
+        if (sock.state == .CLOSED) continue;
 
         const prev_state = sock.state;
         sock.wnd_update_pending = false;
         sock.receive(buffer);
 
         if (prev_state == .SYN_RECEIVED and sock.state == .ESTABLISHED) {
-            accept_queue.appendAssumeCapacity(sock);
-            for (&tcp_server_pool) |*server| {
-                if (server.active and server.port == dport) {
-                    if (server.event_callback) |cb| {
-                        cb(server, .connected);
-                    }
-                }
-            }
-        }
-
-        if (sock.state == .CLOSED) {
-            if (sock.server) |srv| srv.connection_count -= 1;
-            returnSocket(sock);
+            accept_queue.appendBounded(sock) catch {
+                logger.debug("TCP: accept queue full, refusing connection on port {d}\n", .{dport});
+                sock.sendInternal(.{ .rst = 1 }, &.{});
+                sock.state = .CLOSED;
+                returnSocket(sock);
+            };
         }
     }
 }
