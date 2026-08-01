@@ -48,7 +48,18 @@ fn serverEventCallback(srv: *tcp.TcpServer, event: tcp.ServerEvent) void {
     while (srv.accept(processHttpFrame, null)) |_| {}
 }
 
+const index_html = @embedFile("aurora_dashboard_demo.html");
+
 var http_buffer: [1460]u8 = undefined;
+
+const RequestJob = struct {
+    file: []const u8 = &.{},
+    offset: usize = 0,
+    size: usize = 0,
+};
+
+var job: RequestJob = .{};
+
 fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8) void {
     switch (event) {
         .closed => {},
@@ -98,20 +109,43 @@ fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8) vo
 
             var length: usize = 0;
             if (request_type == .GET and std.ascii.eqlIgnoreCase(request_path, "/")) {
+                job = .{ .file = index_html, .offset = 0, .size = index_html.len };
+
                 var b = std.fmt.bufPrint(http_buffer[length..], "HTTP/1.1 200 OK\r\n", .{}) catch unreachable;
                 length += b.len;
                 b = std.fmt.bufPrint(http_buffer[length..], "Content-Type: text/html\r\n", .{}) catch unreachable;
                 length += b.len;
-                b = std.fmt.bufPrint(http_buffer[length..], "Content-Length: 13\r\n", .{}) catch unreachable;
+                b = std.fmt.bufPrint(http_buffer[length..], "Content-Length: {d}\r\n", .{job.size}) catch unreachable;
                 length += b.len;
                 b = std.fmt.bufPrint(http_buffer[length..], "\r\n", .{}) catch unreachable;
                 length += b.len;
-                b = std.fmt.bufPrint(http_buffer[length..], "Hello, World!", .{}) catch unreachable;
-                length += b.len;
             }
 
-            sock.send(http_buffer[0..length]);
-            sock.close();
+            // fill the first packet.
+            const remaining = http_buffer.len - length;
+            const num_packing = @min(remaining, job.size - job.offset);
+
+            @memcpy(http_buffer[length..][0..num_packing], job.file[job.offset..][0..num_packing]);
+            length += num_packing;
+
+            _ = sock.send(http_buffer[0..length]);
+            job.offset += num_packing;
+
+            if (job.offset != job.size) {
+                // now send as much shit as we can
+                logger.debug("Attempting to send: {d} bytes to {f}\n", .{ job.size - job.offset, ipv4.fmtIpAddr(sock.daddr) });
+                const num = sock.send(job.file[job.offset..]);
+                logger.debug("Bytes sent: {d}\n", .{num});
+                job.offset += num;
+            }
+        },
+        .tx_available => {
+            if (job.offset != job.size) {
+                logger.debug("Attempting to send 2: {d} bytes to {f}\n", .{ job.size - job.offset, ipv4.fmtIpAddr(sock.daddr) });
+                const num = sock.send(job.file[job.offset..]);
+                logger.debug("Bytes sent2: {d}\n", .{num});
+                job.offset += num;
+            }
         },
     }
 }
