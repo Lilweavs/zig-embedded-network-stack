@@ -37,15 +37,15 @@ var server: *tcp.TcpServer = undefined;
 pub fn init() bool {
     if (tcp.requestServer()) |srv| {
         server = srv;
-        server.init(7000, serverEventCallback, 3, null);
+        server.init(7000, 3);
+        server.accept_callback = accept;
         return true;
     }
     return false;
 }
 
-fn serverEventCallback(srv: *tcp.TcpServer, event: tcp.ServerEvent) void {
-    _ = event;
-    while (srv.accept(processHttpFrame, null)) |_| {}
+fn accept(sock: *tcp.TcpSocket) void {
+    sock.setCallback(processHttpFrame, null);
 }
 
 const index_html = @embedFile("aurora_dashboard_demo.html");
@@ -60,11 +60,12 @@ const RequestJob = struct {
 
 var job: RequestJob = .{};
 
-fn processHttpFrame(sock: *tcp.TcpSocket, event: tcp.Event, data: []const u8) void {
+fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) void {
+    _ = ctx;
     switch (event) {
-        .closed => {},
-        .connected => {},
-        .data => {
+        .connected, .closed, .err => {},
+        .data_received => {
+            const data = http_buffer[0..sock.recv(http_buffer[0..])];
             logger.debug("HTTP Packet Received:\n{s}", .{data});
             var header: []const u8 = &.{};
             var content: []const u8 = &.{};

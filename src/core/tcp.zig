@@ -213,6 +213,11 @@ pub const TcpSocket = struct {
         }
     }
 
+    pub fn clearCallback(self: *Self) void {
+        self.callback = null;
+        self.cb_context = null;
+    }
+
     pub fn setCallback(self: *Self, callback: EventFn, ctx: ?*anyopaque) void {
         self.callback = callback;
         self.cb_context = ctx;
@@ -314,7 +319,11 @@ pub const TcpSocket = struct {
 
         if (header.flags.rst == 1) {
             switch (self.state) {
-                .SYN_RECEIVED, .ESTABLISHED, .FIN_WAIT_1, .FIN_WAIT_2, .CLOSE_WAIT => {
+                .SYN_RECEIVED => {
+                    self.state = .CLOSED;
+                    return;
+                },
+                .ESTABLISHED, .FIN_WAIT_1, .FIN_WAIT_2, .CLOSE_WAIT => {
                     self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
@@ -350,12 +359,10 @@ pub const TcpSocket = struct {
             },
             .SYN_RECEIVED => {
                 if (header.flags.rst == 1) {
-                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 }
                 if (header.flags.syn == 1) {
-                    self.pushEvent(.err);
                     self.state = .CLOSED;
                     return;
                 }
@@ -365,6 +372,7 @@ pub const TcpSocket = struct {
                         self.snd_wl1 = seg_seq;
                         self.snd_wl2 = seg_ack;
                         self.state = .ESTABLISHED;
+                        self.pushEvent(.connected);
                     }
                 }
             },
@@ -578,22 +586,14 @@ pub const TcpServer = struct {
     max_connections: usize = tcp_pool_size,
     connection_count: usize = 0,
 
+    accept_callback: ?*const fn (sock: *TcpSocket) void = null,
+
     const Self = @This();
 
     pub fn init(self: *Self, port: u16, max_conns: usize) void {
         self.port = port;
         self.max_connections = @min(max_conns, tcp_pool_size);
         self.active = true;
-    }
-
-    pub fn accept(self: *Self) ?*TcpSocket {
-        for (accept_queue.items, 0..) |sock, i| {
-            if (sock.server == self) {
-                _ = accept_queue.swapRemove(i);
-                return sock;
-            }
-        }
-        return null;
     }
 };
 
@@ -602,6 +602,9 @@ pub var tcp_server_pool: [tcp_server_pool_size]TcpServer = .{TcpServer{}} ** tcp
 
 var accept_queue_buf: [4]*TcpSocket = undefined;
 var accept_queue: std.ArrayList(*TcpSocket) = .initBuffer(&accept_queue_buf);
+
+var recycle_queue_buf: [tcp_pool_size]*TcpSocket = undefined;
+var recycle_queue: std.ArrayList(*TcpSocket) = .initBuffer(&recycle_queue_buf);
 
 pub fn requestServer() ?*TcpServer {
     for (&tcp_server_pool) |*srv| {
@@ -613,21 +616,41 @@ pub fn requestServer() ?*TcpServer {
 }
 
 pub fn flushAll() void {
-    for (&tcp_pool.items) |*sock| {
+    for (tcp_pool.items) |*sock| {
         sock.flush();
     }
 }
 
 pub fn dispatchEvents() void {
-    var i: usize = 0;
-    while (i < event_queue.items.len) : (i += 1) {
-        const item = event_queue.items[i];
+    for (event_queue.items) |item| {
         if (item.sock.callback) |cb| {
             item.sock.pending_events.unset(@intFromEnum(item.event));
             cb(item.sock, item.sock.cb_context, item.event);
         }
     }
     event_queue.clearRetainingCapacity();
+
+    for (recycle_queue.items) |sock| {
+        for (accept_queue.items, 0..) |s, i| {
+            if (s == sock) {
+                _ = accept_queue.swapRemove(i);
+                break;
+            }
+        }
+        if (sock.server) |srv| srv.connection_count -= 1;
+        returnSocket(sock);
+    }
+}
+
+pub fn dispatchAccept() void {
+    for (accept_queue.items) |sock| {
+        if (sock.server) |server| {
+            if (server.accept_callback) |cb| {
+                cb(sock);
+            }
+        }
+    }
+    accept_queue.clearRetainingCapacity();
 }
 
 pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
@@ -701,8 +724,11 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
                 logger.debug("TCP: accept queue full, refusing connection on port {d}\n", .{dport});
                 sock.sendInternal(.{ .rst = 1 }, &.{});
                 sock.state = .CLOSED;
-                returnSocket(sock);
             };
+        }
+
+        if (sock.state == .CLOSED) {
+            recycle_queue.appendAssumeCapacity(sock);
         }
     }
 }
