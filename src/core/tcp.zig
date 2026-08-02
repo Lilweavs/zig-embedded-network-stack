@@ -640,6 +640,7 @@ pub fn dispatchEvents() void {
         if (sock.server) |srv| srv.connection_count -= 1;
         returnSocket(sock);
     }
+    recycle_queue.clearRetainingCapacity();
 }
 
 pub fn dispatchAccept() void {

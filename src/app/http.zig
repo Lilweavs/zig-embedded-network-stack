@@ -63,7 +63,8 @@ var job: RequestJob = .{};
 fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) void {
     _ = ctx;
     switch (event) {
-        .connected, .closed, .err => {},
+        .connected => {},
+        .closed, .err => sock.close(),
         .data_received => {
             const data = http_buffer[0..sock.recv(http_buffer[0..])];
             logger.debug("HTTP Packet Received:\n{s}", .{data});
