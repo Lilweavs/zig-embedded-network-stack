@@ -34,18 +34,17 @@ const HttpState = enum {
 
 var server: *tcp.TcpServer = undefined;
 
+const max_connections: usize = 3;
+
 pub fn init() bool {
+    job_pool.items.len = job_pool_buffer.len;
     if (tcp.requestServer()) |srv| {
         server = srv;
-        server.init(7000, 3);
+        server.init(7000, max_connections);
         server.accept_callback = accept;
         return true;
     }
     return false;
-}
-
-fn accept(sock: *tcp.TcpSocket) void {
-    sock.setCallback(processHttpFrame, null);
 }
 
 const index_html = @embedFile("aurora_dashboard_demo.html");
@@ -58,13 +57,23 @@ const RequestJob = struct {
     size: usize = 0,
 };
 
-var job: RequestJob = .{};
+var job_pool_buffer: [max_connections]RequestJob = undefined;
+var job_pool: std.ArrayList(RequestJob) = .initBuffer(&job_pool_buffer);
+
+fn accept(sock: *tcp.TcpSocket) void {
+    const job = &job_pool.items[job_pool.items.len - 1];
+    sock.setCallback(processHttpFrame, job);
+    job_pool.items.len -= 1;
+}
 
 fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) void {
-    _ = ctx;
+    const job: *RequestJob = @ptrCast(@alignCast(ctx.?));
     switch (event) {
         .connected => {},
-        .closed, .err => sock.close(),
+        .closed, .err => {
+            _ = job_pool.addOneAssumeCapacity();
+            sock.close();
+        },
         .data_received => {
             const data = http_buffer[0..sock.recv(http_buffer[0..])];
             logger.debug("HTTP Packet Received:\n{s}", .{data});
@@ -111,7 +120,7 @@ fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) vo
 
             var length: usize = 0;
             if (request_type == .GET and std.ascii.eqlIgnoreCase(request_path, "/")) {
-                job = .{ .file = index_html, .offset = 0, .size = index_html.len };
+                job.* = .{ .file = index_html, .offset = 0, .size = index_html.len };
 
                 var b = std.fmt.bufPrint(http_buffer[length..], "HTTP/1.1 200 OK\r\n", .{}) catch unreachable;
                 length += b.len;
