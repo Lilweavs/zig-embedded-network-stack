@@ -53,6 +53,8 @@ pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, co
                     iface.processFrame(frame);
                 }
             }
+            // TODO: flushAll segfaults. fix it later
+            // tcp.flushAll();
             tcp.dispatchAccept();
             tcp.dispatchEvents();
         }
