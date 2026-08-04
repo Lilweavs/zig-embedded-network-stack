@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../types.zig");
 const syntax = @import("../syntax.zig");
 const ipv4 = @import("../core/ipv4.zig");
+const time = @import("../time.zig");
 
 pub const TcpHeader = syntax.tcp.TcpHeader;
 pub const TcpFlags = syntax.tcp.TcpFlags;
@@ -171,6 +172,8 @@ pub const TcpSocket = struct {
     // pending_events: u8 = 0,
     pending_events: std.StaticBitSet(8) = .initEmpty(),
 
+    rto_timer: u32 = 0,
+
     snd_una: u32 = 0,
     snd_nxt: u32 = 0,
     snd_wnd: u16 = 0,
@@ -250,12 +253,19 @@ pub const TcpSocket = struct {
 
     pub fn flush(self: *Self) void {
         const iface = self.iface orelse return;
-        std.debug.assert(self.tx_buffer.availableBytes() >= self.bytesNotAcked());
-        const unsent = self.tx_buffer.availableBytes() - self.bytesNotAcked();
+
+        const now = time.millis();
+        if ((now - self.rto_timer) > (1 * std.time.ms_per_s)) return; // RTO not over
+        logger.debug("RTO up\n", .{});
+        const unsent = self.bytesNotAcked();
         if (unsent == 0) return;
 
         const frame = iface.requestFrame() orelse return;
+
         const to_send = @min(unsent, @as(usize, self.peer_mss));
+
+        logger.debug("RTO: {d}\n", .{to_send});
+
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
         _ = self.tx_buffer.peek(self.bytesNotAcked(), frame.buffer[sidx..][0..to_send]);
         self.sendFrame(iface, frame, to_send);
@@ -291,6 +301,7 @@ pub const TcpSocket = struct {
         const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
         @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
+        self.rto_timer = time.millis();
         ipv4.send(iface, self.daddr, frame, .TCP);
         self.snd_nxt +%= data_len;
         self.wnd_update_pending = false;
@@ -393,6 +404,7 @@ pub const TcpSocket = struct {
                         const bytes_acked = seg_ack -% self.snd_una;
                         self.tx_buffer.consume(bytes_acked);
                         self.snd_una = seg_ack;
+                        self.rto_timer = time.millis();
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
                             self.pushEvent(.tx_available);
@@ -508,6 +520,7 @@ pub const TcpSocket = struct {
         const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
         @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
+        self.rto_timer = time.millis();
         ipv4.send(iface, self.daddr, frame, .TCP);
 
         if (flags.fin == 1 or flags.syn == 1) {
