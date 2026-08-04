@@ -16,6 +16,7 @@ const HttpRequestType = enum {
     OPTIONS,
     TRACE,
     PATCH,
+    Invalid,
 };
 
 const HttpRequest = struct {
@@ -76,7 +77,7 @@ fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) vo
         },
         .data_received => {
             const data = http_buffer[0..sock.recv(http_buffer[0..])];
-            logger.debug("HTTP Packet Received:\n{s}", .{data});
+            // logger.debug("HTTP Packet Received:\n{s}", .{data});
             var header: []const u8 = &.{};
             var content: []const u8 = &.{};
             if (std.mem.findPosLinear(u8, data, 0, "\r\n\r\n")) |idx| {
@@ -84,78 +85,87 @@ fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) vo
                 content = data[0 .. idx + 2][0..];
             }
 
-            var iter = std.mem.tokenizeScalar(u8, header, ' ');
+            var kv_iter = std.mem.tokenizeSequence(u8, header, "\r\n");
+
             const state: HttpState = .ParseRequestType;
-            var request_type: HttpRequestType = .GET;
+            var request_type: HttpRequestType = .Invalid;
             var request_path: []const u8 = &.{};
-            loop: switch (state) {
-                .ParseRequestType => {
-                    const str = iter.next() orelse continue :loop .Invalid;
-                    if (std.ascii.eqlIgnoreCase(str, "get")) {
-                        request_type = .GET;
-                    } else if (std.ascii.eqlIgnoreCase(str, "head")) {
-                        request_type = .HEAD;
-                    } else if (std.ascii.eqlIgnoreCase(str, "post")) {
-                        request_type = .POST;
-                    } else if (std.ascii.eqlIgnoreCase(str, "put")) {
-                        request_type = .PUT;
-                    } else if (std.ascii.eqlIgnoreCase(str, "delete")) {
-                        request_type = .DELETE;
-                    } else {
-                        @panic("not implemented\n");
+            while (kv_iter.next()) |kv_str| {
+                logger.debug("HTTP: kv -> {s}\n", .{kv_str});
+                var iter = std.mem.tokenizeScalar(u8, kv_str, ' ');
+
+                switch (state) {
+                    .ParseRequestType => {
+                        const str = iter.next() orelse return;
+                        if (std.ascii.eqlIgnoreCase(str, "get")) {
+                            request_type = .GET;
+                        } else if (std.ascii.eqlIgnoreCase(str, "head")) {
+                            request_type = .HEAD;
+                        } else if (std.ascii.eqlIgnoreCase(str, "post")) {
+                            request_type = .POST;
+                        } else if (std.ascii.eqlIgnoreCase(str, "put")) {
+                            request_type = .PUT;
+                        } else if (std.ascii.eqlIgnoreCase(str, "delete")) {
+                            request_type = .DELETE;
+                        } else {
+                            @panic("not implemented\n");
+                        }
+
+                        request_path = iter.next() orelse return;
+
+                        if (iter.next()) |tmp| {
+                            logger.debug("HTTP: {s}\n", .{tmp});
+                            if (std.ascii.eqlIgnoreCase(tmp, "HTTP/1.1")) {
+                                request_type = .GET;
+                                break;
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            // TODO: move to an httpGet() function
+            if (request_type == .GET) {
+                if (std.ascii.eqlIgnoreCase(request_path, "/")) {
+                    var length: usize = 0;
+                    job.* = .{ .file = index_html, .offset = 0, .size = index_html.len };
+                    logger.debug("HTTP: new job /index.html {d} bytes\n", .{index_html.len});
+
+                    var b = std.fmt.bufPrint(http_buffer[length..], "HTTP/1.1 200 OK\r\n", .{}) catch unreachable;
+                    length += b.len;
+                    b = std.fmt.bufPrint(http_buffer[length..], "Content-Type: text/html\r\n", .{}) catch unreachable;
+                    length += b.len;
+                    b = std.fmt.bufPrint(http_buffer[length..], "Content-Length: {d}\r\n", .{job.size}) catch unreachable;
+                    length += b.len;
+                    b = std.fmt.bufPrint(http_buffer[length..], "\r\n", .{}) catch unreachable;
+                    length += b.len;
+
+                    const remaining = http_buffer.len - length;
+                    const num_packing = @min(remaining, job.size - job.offset);
+
+                    @memcpy(http_buffer[length..][0..num_packing], job.file[job.offset..][0..num_packing]);
+                    length += num_packing;
+
+                    logger.debug("HTTP: {d} -> {d}/{d}\n", .{ sock.sport, num_packing, job.size });
+
+                    _ = sock.send(http_buffer[0..length]);
+                    job.offset += num_packing;
+
+                    if (job.offset != job.size) {
+                        // now send as much shit as we can
+                        const num = sock.send(job.file[job.offset..]);
+                        job.offset += num;
+                        logger.debug("HTTP: {d} -> {d}/{d}\n", .{ sock.sport, job.offset, job.size });
                     }
-
-                    request_path = iter.next() orelse continue :loop .Invalid;
-
-                    if (iter.next()) |tmp| {
-                        if (std.ascii.eqlIgnoreCase(tmp, "HTTP/1.1")) {} else continue :loop .Invalid;
-                    } else continue :loop .Invalid;
-                    continue :loop .Done;
-                },
-                .Done => {},
-                else => {
-                    logger.debug("request not implemented\n", .{});
-                },
-            }
-
-            var length: usize = 0;
-            if (request_type == .GET and std.ascii.eqlIgnoreCase(request_path, "/")) {
-                job.* = .{ .file = index_html, .offset = 0, .size = index_html.len };
-
-                var b = std.fmt.bufPrint(http_buffer[length..], "HTTP/1.1 200 OK\r\n", .{}) catch unreachable;
-                length += b.len;
-                b = std.fmt.bufPrint(http_buffer[length..], "Content-Type: text/html\r\n", .{}) catch unreachable;
-                length += b.len;
-                b = std.fmt.bufPrint(http_buffer[length..], "Content-Length: {d}\r\n", .{job.size}) catch unreachable;
-                length += b.len;
-                b = std.fmt.bufPrint(http_buffer[length..], "\r\n", .{}) catch unreachable;
-                length += b.len;
-            }
-
-            // fill the first packet.
-            const remaining = http_buffer.len - length;
-            const num_packing = @min(remaining, job.size - job.offset);
-
-            @memcpy(http_buffer[length..][0..num_packing], job.file[job.offset..][0..num_packing]);
-            length += num_packing;
-
-            _ = sock.send(http_buffer[0..length]);
-            job.offset += num_packing;
-
-            if (job.offset != job.size) {
-                // now send as much shit as we can
-                logger.debug("Attempting to send: {d} bytes to {f}\n", .{ job.size - job.offset, ipv4.fmtIpAddr(sock.daddr) });
-                const num = sock.send(job.file[job.offset..]);
-                logger.debug("Bytes sent: {d}\n", .{num});
-                job.offset += num;
+                }
             }
         },
         .tx_available => {
             if (job.offset != job.size) {
-                logger.debug("Attempting to send 2: {d} bytes to {f}\n", .{ job.size - job.offset, ipv4.fmtIpAddr(sock.daddr) });
                 const num = sock.send(job.file[job.offset..]);
-                logger.debug("Bytes sent2: {d}\n", .{num});
                 job.offset += num;
+                logger.debug("HTTP: cb {d} -> {d}/{d}\n", .{ sock.sport, job.offset, job.size });
             }
         },
     }
