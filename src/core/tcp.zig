@@ -255,8 +255,8 @@ pub const TcpSocket = struct {
         const iface = self.iface orelse return;
 
         const now = time.millis();
-        if ((now - self.rto_timer) > (1 * std.time.ms_per_s)) return; // RTO not over
-        logger.debug("RTO up\n", .{});
+        if ((now - self.rto_timer) < (1 * std.time.ms_per_s)) return; // RTO not over
+        self.rto_timer = now;
         const unsent = self.bytesNotAcked();
         if (unsent == 0) return;
 

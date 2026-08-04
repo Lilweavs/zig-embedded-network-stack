@@ -54,7 +54,7 @@ pub fn NetworkStack(comptime iface_count: usize, comptime arp_entries: usize, co
                 }
             }
             // TODO: flushAll segfaults. fix it later
-            // tcp.flushAll();
+            tcp.flushAll();
             tcp.dispatchAccept();
             tcp.dispatchEvents();
         }
