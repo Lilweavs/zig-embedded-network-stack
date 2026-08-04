@@ -268,7 +268,7 @@ pub const TcpSocket = struct {
 
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
         _ = self.tx_buffer.peek(self.bytesNotAcked(), frame.buffer[sidx..][0..to_send]);
-        self.sendFrame(iface, frame, to_send);
+        self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, to_send);
     }
 
     fn sendSegment(self: *Self, data: []const u8) void {
@@ -277,23 +277,23 @@ pub const TcpSocket = struct {
 
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
         @memcpy(frame.buffer[sidx..][0..data.len], data);
-        self.sendFrame(iface, frame, data.len);
+        self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, data.len);
     }
 
-    fn sendFrame(self: *Self, iface: *types.Interface, frame: *types.Frame, data_len: usize) void {
+    fn sendFrame(self: *Self, iface: *types.Interface, frame: *types.Frame, flags: TcpFlags, payload_len: usize) void {
         var header = TcpHeader{
             .sport = std.mem.nativeToBig(u16, self.port),
             .dport = std.mem.nativeToBig(u16, self.sport),
             .seq_number = std.mem.nativeToBig(u32, self.snd_nxt),
             .ack_number = std.mem.nativeToBig(u32, self.rcv_nxt),
             .data_offset = 0x50,
-            .flags = .{ .ack = 1, .psh = 1 },
+            .flags = flags,
             .window = std.mem.nativeToBig(u16, self.rcv_wnd),
         };
 
         const sidx = types.TRANSPORT_HEADER_OFFSET;
         const pos = sidx + @sizeOf(TcpHeader);
-        const end = pos + data_len;
+        const end = pos + payload_len;
 
         @memcpy(frame.buffer[sidx..pos], std.mem.asBytes(&header));
         frame.len = end - sidx;
@@ -303,7 +303,7 @@ pub const TcpSocket = struct {
 
         self.rto_timer = time.millis();
         ipv4.send(iface, self.daddr, frame, .TCP);
-        self.snd_nxt +%= data_len;
+        self.snd_nxt +%= @as(u32, @intCast(payload_len)) + @as(u32, flags.syn) + @as(u32, flags.fin);
         self.wnd_update_pending = false;
     }
 
@@ -493,39 +493,16 @@ pub const TcpSocket = struct {
         }
     }
 
-    fn sendInternal(self: *Self, flags: TcpFlags, payload: []u8) void {
-        const iface = self.iface.?;
+    fn sendInternal(self: *Self, flags: TcpFlags, payload: []const u8) void {
+        const iface = self.iface orelse return;
         const frame = iface.requestFrame() orelse return;
 
-        var header = TcpHeader{
-            .sport = std.mem.nativeToBig(u16, self.port),
-            .dport = std.mem.nativeToBig(u16, self.sport),
-            .seq_number = std.mem.nativeToBig(u32, self.snd_nxt),
-            .ack_number = std.mem.nativeToBig(u32, self.rcv_nxt),
-            .data_offset = 0x50,
-            .flags = flags,
-            .window = std.mem.nativeToBig(u16, self.rcv_wnd),
-        };
-
-        const sidx: usize = types.TRANSPORT_HEADER_OFFSET;
-        var pos: usize = sidx;
-        var end: usize = pos + @sizeOf(TcpHeader);
-        @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
-
-        pos = end;
-        end = pos + payload.len;
-
-        frame.len = end - sidx;
-
-        const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
-        @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
-
-        self.rto_timer = time.millis();
-        ipv4.send(iface, self.daddr, frame, .TCP);
-
-        if (flags.fin == 1 or flags.syn == 1) {
-            self.snd_nxt +%= 1;
+        const sidx = types.TRANSPORT_HEADER_OFFSET;
+        if (payload.len > 0) {
+            @memcpy(frame.buffer[sidx + @sizeOf(TcpHeader) ..][0..payload.len], payload);
         }
+
+        self.sendFrame(iface, frame, flags, payload.len);
     }
 
     pub fn sendAck(self: *Self) void {
