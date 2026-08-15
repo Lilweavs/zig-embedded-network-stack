@@ -36,6 +36,8 @@ pub fn send(iface: *types.Interface, daddr: u32, frame: *types.Frame, proto: Pro
     };
 
     @memcpy(frame.buffer[types.NET_HEADER_OFFSET..][0..@sizeOf(IPv4Header)], std.mem.asBytes(&header));
+    const checksum = calculateIPv4Checksum(frame.buffer[types.NET_HEADER_OFFSET..][0..@sizeOf(IPv4Header)], 0);
+    @memcpy(frame.buffer[types.NET_HEADER_OFFSET..][@offsetOf(IPv4Header, "checksum")..][0..2], std.mem.asBytes(&checksum));
 
     frame.len += @sizeOf(IPv4Header);
 
