@@ -132,6 +132,7 @@ pub const DhcpClient = struct {
     renewal_time: u32 = 0,
     rebind_time: u32 = 0,
     backoff_time: u32 = 1000, // in milliseconds
+    ack_time: u32 = 0,
     num_retries: u32 = 0,
 
     pub fn init(self: *Self, iface: *types.Interface) error{PortInUse}!void {
@@ -152,7 +153,6 @@ pub const DhcpClient = struct {
             .Disable => {},
             .Uninit => {},
             .Discover => {
-                logger.debug("DHCP: Discover\n", .{});
                 self.dhcpSend(.Discover);
             },
             .WaitingForOffer => {
@@ -169,7 +169,14 @@ pub const DhcpClient = struct {
                     }
                 }
             },
-            .WaitingForAck => {},
+            .WaitingForAck => {
+                const now_s = time.millis() / 1000;
+                if (now_s >= self.ack_time) {
+                    self.ack_time += self.backoff_time;
+                    self.backoff_time = @min(self.backoff_time * 2, 60 * std.time.ms_per_s);
+                    self.dhcpSend(.Request);
+                }
+            },
             .Complete => {
                 const now_s = time.millis() / 1000;
                 if (now_s >= self.rebind_time) {
@@ -192,7 +199,9 @@ pub const DhcpClient = struct {
 
     fn dhcpSend(self: *Self, msg: MessageType) void {
         if (self.socket) |s| {
+            logger.debug("DHCP: {s}\n", .{@tagName(msg)});
             if (self.iface.requestFrame()) |frame| {
+                logger.debug("DHCP: frame acquired\n", .{});
                 const now = time.millis();
                 var dhcp_header: DHCPHeader = .{
                     .op = 0x01,
@@ -279,6 +288,7 @@ pub const DhcpClient = struct {
                     .IPAddressLeaseTime => {
                         self.lease_time = std.mem.bigToNative(u32, std.mem.bytesToValue(u32, option.payload));
                         const now_s = time.millis() / 1000;
+                        self.ack_time = now_s;
                         self.renewal_time = now_s + self.lease_time / 2;
                         self.rebind_time = now_s + self.lease_time * 7 / 8;
                         logger.debug("IP lease time: {d}\n", .{self.lease_time});
@@ -293,7 +303,7 @@ pub const DhcpClient = struct {
                     else => {},
                 }
             }
-
+            self.backoff_time = 1000;
             self.dhcpSend(.Request);
         } else if (self.state == .WaitingForAck and dhcp_data.op == 2) {
             logger.debug("DHCP: Received Ack\n", .{});
@@ -312,6 +322,7 @@ pub const DhcpClient = struct {
                 }
             }
 
+            self.backoff_time = 1000;
             self.state = .Complete;
             logger.debug("IpAddr: {f}\n", .{ipv4.fmtIpAddr(self.requested_addr)});
         }
