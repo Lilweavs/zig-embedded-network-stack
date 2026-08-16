@@ -267,7 +267,7 @@ pub const TcpSocket = struct {
         logger.debug("RTO: {d}\n", .{to_send});
 
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
-        _ = self.tx_buffer.peek(self.bytesNotAcked(), frame.buffer[sidx..][0..to_send]);
+        _ = self.tx_buffer.peek(0, frame.buffer[sidx..][0..to_send]);
         self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, to_send);
     }
 
