@@ -69,6 +69,9 @@ pub fn pingReply(iface: *types.Interface, addr: u32, payload: []u8) void {
         end = pos + (payload.len - @sizeOf(PingHeader));
         @memcpy(frame.buffer[pos..end], payload[@sizeOf(PingHeader)..]);
 
+        const checksum = ipv4.calculateIPv4Checksum(frame.buffer[sidx..end], 0);
+        @memcpy(frame.buffer[sidx..][@offsetOf(PingHeader, "checksum")..][0..2], std.mem.asBytes(&checksum));
+
         frame.len = end - sidx;
 
         ipv4.send(iface, addr, frame, .ICMP);
