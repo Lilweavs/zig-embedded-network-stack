@@ -86,13 +86,14 @@ const Parser = struct {
                     if (iter.next()) |str| {
                         if (str.len > req.target.len) return error.UriTooLong; // 413
                         @memcpy(req.target[0..str.len], str);
-                        req.target_len = str.len;
+                        req.target_len = @intCast(str.len);
                     } else return error.BadRequest;
 
                     // parse version
                     if (iter.next()) |str| {
                         if (!std.ascii.eqlIgnoreCase(str, "HTTP/1.1")) return error.HttpVersionNotSupported; // 505
                     } else return error.BadRequest;
+                    p.state = .Options;
                 },
                 .Options => {
                     var iter = std.mem.tokenizeScalar(u8, line, ' ');
@@ -135,4 +136,222 @@ const Parser = struct {
 fn validateHost(host: []const u8) bool {
     _ = host;
     return true;
+}
+
+test "simple GET request line" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result);
+    try std.testing.expectEqual(Method.GET, req.method);
+    try std.testing.expectEqualStrings("/", req.target[0..req.target_len]);
+}
+
+test "GET request with host and connection headers" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET /dashboard HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result);
+    try std.testing.expectEqual(Method.GET, req.method);
+    try std.testing.expectEqualStrings("/dashboard", req.target[0..req.target_len]);
+    try std.testing.expectEqual(Connection.Close, req.connection);
+}
+
+test "POST request" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "POST /submit HTTP/1.1\r\nHost: localhost\r\nContent-Length: 42\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result);
+    try std.testing.expectEqual(Method.POST, req.method);
+    try std.testing.expectEqualStrings("/submit", req.target[0..req.target_len]);
+    try std.testing.expectEqual(@as(usize, 42), req.content_length);
+}
+
+test "unknown headers are skipped" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\nHost: ok.com\r\nX-Custom: foo\r\nAccept: */*\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result);
+}
+
+test "default connection is keep-alive" {
+    const req: Request = .{ .method = .GET };
+    try std.testing.expectEqual(Connection.KeepAlive, req.connection);
+}
+
+test "need more on partial request line" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET /";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.NeedMore, result);
+}
+
+test "need more on partial header" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\nHost: exa";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.NeedMore, result);
+}
+
+test "error on unsupported method" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "DELETE / HTTP/1.1\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.MethodNotAllowed, result);
+}
+
+test "error on bad http version" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/2.0\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.HttpVersionNotSupported, result);
+}
+
+test "error on uri too long" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const long_target = "/" ++ ("a" ** 128);
+    const input = "GET " ++ long_target ++ " HTTP/1.1\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.UriTooLong, result);
+}
+
+test "error on duplicate host" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\nHost: a.com\r\nHost: b.com\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.BadRequest, result);
+}
+
+test "error on bad content-length" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\nContent-Length: notanumber\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.BadRequest, result);
+}
+
+test "error on unknown connection value" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\nConnection: garbage\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.BadRequest, result);
+}
+
+test "uppercase method is required" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .POST };
+
+    const input = "get / HTTP/1.1\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectError(error.MethodNotAllowed, result);
+}
+
+test "case insensitive connection header" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    const input = "GET / HTTP/1.1\r\nConnection: Keep-Alive\r\n\r\n";
+    const result = parser.parse(input, &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result);
+    try std.testing.expectEqual(Connection.KeepAlive, req.connection);
+}
+
+test "reuse parser for multiple requests" {
+    var req: Request = .{ .method = .GET };
+
+    {
+        var parser: Parser = .{};
+        const input = "GET /a HTTP/1.1\r\nHost: one.com\r\n\r\n";
+        const result = parser.parse(input, &req);
+        try std.testing.expectEqual(Parser.Result.Complete, result);
+        try std.testing.expectEqualStrings("/a", req.target[0..req.target_len]);
+    }
+
+    {
+        var parser: Parser = .{};
+        const input = "POST /b HTTP/1.1\r\nHost: two.com\r\nContent-Length: 10\r\n\r\n";
+        const result = parser.parse(input, &req);
+        try std.testing.expectEqual(Parser.Result.Complete, result);
+        try std.testing.expectEqualStrings("/b", req.target[0..req.target_len]);
+        try std.testing.expectEqual(Method.POST, req.method);
+        try std.testing.expectEqual(@as(usize, 10), req.content_length);
+    }
+}
+
+test "incremental parse: partial data then completion" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    var buf: [256]u8 = undefined;
+    const full = "POST /api/data HTTP/1.1\r\nHost: example.com\r\nContent-Length: 256\r\nConnection: close\r\n\r\n";
+
+    // stage 1: only request line arrives
+    const len1: usize = 25;
+    @memcpy(buf[0..len1], full[0..len1]);
+    const result1 = parser.parse(buf[0..len1], &req);
+    try std.testing.expectEqual(Parser.Result.NeedMore, result1);
+
+    // stage 2: first header arrives
+    const len2: usize = 47;
+    @memcpy(buf[len1..len2], full[len1..len2]);
+    const result2 = parser.parse(buf[0..len2], &req);
+    try std.testing.expectEqual(Parser.Result.NeedMore, result2);
+
+    // stage 3: remaining headers and blank line arrive
+    const len3 = full.len;
+    @memcpy(buf[len2..len3], full[len2..len3]);
+    const result3 = parser.parse(buf[0..len3], &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result3);
+
+    try std.testing.expectEqual(Method.POST, req.method);
+    try std.testing.expectEqualStrings("/api/data", req.target[0..req.target_len]);
+    try std.testing.expectEqual(Connection.Close, req.connection);
+    try std.testing.expectEqual(@as(usize, 256), req.content_length);
+}
+
+test "incremental parse: header value split across chunks" {
+    var parser: Parser = .{};
+    var req: Request = .{ .method = .GET };
+
+    var buf: [256]u8 = undefined;
+    const full = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+    // stage 1: request line + partial header value ("Host: exa")
+    const len1: usize = 25;
+    @memcpy(buf[0..len1], full[0..len1]);
+    const result1 = parser.parse(buf[0..len1], &req);
+    try std.testing.expectEqual(Parser.Result.NeedMore, result1);
+
+    // stage 2: rest of header value + blank line ("mple.com\r\n\r\n")
+    const len2 = full.len;
+    @memcpy(buf[len1..len2], full[len1..len2]);
+    const result2 = parser.parse(buf[0..len2], &req);
+    try std.testing.expectEqual(Parser.Result.Complete, result2);
+
+    try std.testing.expectEqual(Method.GET, req.method);
+    try std.testing.expectEqualStrings("/", req.target[0..req.target_len]);
+    try std.testing.expectEqual(Connection.KeepAlive, req.connection);
 }

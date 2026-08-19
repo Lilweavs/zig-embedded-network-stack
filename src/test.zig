@@ -7,6 +7,7 @@ const core_arp = @import("core/arp.zig");
 const core_tcp = @import("core/tcp.zig");
 const core_stack = @import("core/stack.zig");
 const dhcp = @import("app/dhcp.zig");
+const http_parser = @import("app/http/parser.zig");
 
 test "include ipv4" { _ = ipv4; }
 test "include udp" { _ = udp; }
@@ -15,6 +16,7 @@ test "include core_arp" { _ = core_arp; }
 test "include core_tcp" { _ = core_tcp; }
 test "include core_stack" { _ = core_stack; }
 test "include dhcp" { _ = dhcp; }
+test "include http_parser" { _ = http_parser; }
 
 fn testMillis() u32 {
     return 0;
