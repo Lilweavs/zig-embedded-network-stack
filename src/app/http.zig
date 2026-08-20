@@ -38,7 +38,6 @@ var server: *tcp.TcpServer = undefined;
 const max_connections: usize = 3;
 
 pub fn init() bool {
-    job_pool.items.len = job_pool_buffer.len;
     if (tcp.requestServer()) |srv| {
         server = srv;
         server.init(7000, max_connections);
@@ -58,13 +57,35 @@ const RequestJob = struct {
     size: usize = 0,
 };
 
-var job_pool_buffer: [max_connections]RequestJob = undefined;
-var job_pool: std.ArrayList(RequestJob) = .initBuffer(&job_pool_buffer);
+var connection_pool_backing_buffer: [max_connections]ConnectionHandler = undefined;
+var connect_pool: std.ArrayList(ConnectionHandler) = .initBuffer(&connection_pool_backing_buffer);
+
+const ConnectionHandler = struct {
+    socket: *tcp.TcpSocket,
+    parser: @import("http/parser.zig"),
+
+    pub fn init(h: *ConnectionHandler, sock: *tcp.TcpSocket) void {
+        h.socket = sock;
+        h.socket.setCallback(h.processHttpData, h);
+    }
+
+    pub fn processHttpData(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) void {
+        const h = @as(*ConnectionHandler, (@ptrCast(ctx)));
+        switch (event) {
+            .connected => {},
+            .closed, .err => {
+                _ = connect_pool.addOneAssumeCapacity();
+                sock.close();
+            },
+            .data_received => {},
+            .tx_available => {},
+        }
+    }
+};
 
 fn accept(sock: *tcp.TcpSocket) void {
-    const job = &job_pool.items[job_pool.items.len - 1];
-    sock.setCallback(processHttpFrame, job);
-    job_pool.items.len -= 1;
+    const handler = connect_pool.addOneBounded() catch return; // silently drop if we are out of connections
+    handler.init(sock);
 }
 
 fn processHttpFrame(sock: *tcp.TcpSocket, ctx: ?*anyopaque, event: tcp.Event) void {
