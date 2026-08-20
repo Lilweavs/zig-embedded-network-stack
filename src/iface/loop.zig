@@ -8,11 +8,11 @@ pub const LoopDevice = struct {
     has_data: bool = false,
 };
 
-pub fn loopSend(dev: *LoopDevice, iface: *types.Interface, dst_mac: [6]u8, slot: *types.Node, ethertype: u16) void {
+pub fn loopSend(dev: *LoopDevice, iface: *types.Interface, dst_mac: [6]u8, frame: *types.Frame, ethertype: u16) void {
     _ = iface;
     _ = dst_mac;
     _ = ethertype;
-    const data = slot.header[0..slot.len];
+    const data = frame.buffer[0..frame.len];
     @memcpy(dev.rx_buf[0..data.len], data);
     dev.rx_len = data.len;
     dev.has_data = true;

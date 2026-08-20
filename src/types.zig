@@ -95,7 +95,7 @@ pub const FrameQueue = struct {
 
 pub const Device = union(enum) {
     eth: @import("iface/eth.zig").EthDevice,
-    // loop: @import("iface/loop.zig").LoopDevice,
+    loop: @import("iface/loop.zig").LoopDevice,
 };
 
 pub const Interface = struct {
@@ -123,26 +123,29 @@ pub const Interface = struct {
 
     pub fn send(self: *Self, dst_mac: [6]u8, frame: *Frame, ethertype: u16) void {
         const eth_mod = @import("iface/eth.zig");
-        // const loop_mod = @import("iface/loop.zig");
+        const loop_mod = @import("iface/loop.zig");
         switch (self.device) {
             .eth => |*d| eth_mod.ethSend(d, self, dst_mac, frame, ethertype),
+            .loop => |*d| loop_mod.loopSend(d, self, dst_mac, frame, ethertype),
         }
         self.tx_queue.returnFrame(frame);
     }
 
     pub fn recv(self: *Self) ?[]u8 {
         const eth_mod = @import("iface/eth.zig");
-        // const loop_mod = @import("iface/loop.zig");
+        const loop_mod = @import("iface/loop.zig");
         return switch (self.device) {
             .eth => |*d| eth_mod.ethRecv(d),
+            .loop => |*d| loop_mod.loopRecv(d),
         };
     }
 
     pub fn processFrame(self: *Self, buffer: []u8) void {
         const eth_mod = @import("iface/eth.zig");
-        // const loop_mod = @import("iface/loop.zig");
+        const loop_mod = @import("iface/loop.zig");
         switch (self.device) {
             .eth => |*d| eth_mod.ethProcess(d, self, buffer),
+            .loop => |*d| loop_mod.loopProcess(d, self, buffer),
         }
     }
 };
