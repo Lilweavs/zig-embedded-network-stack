@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // TODO: keep unsupported methods commented for now
-const Method = enum {
+pub const Method = enum {
     GET,
     // HEAD,
     POST,
@@ -14,12 +14,12 @@ const Method = enum {
     // Invalid,
 };
 
-const Connection = enum {
+pub const Connection = enum {
     Close,
     KeepAlive,
 };
 
-const Request = struct {
+pub const Request = struct {
     method: Method,
     target: [128]u8 = undefined, // could just be a hash
     target_len: u8 = 0,
@@ -42,7 +42,7 @@ const HeaderOptions = enum {
     Unknown,
 };
 
-const HttpError = error{
+pub const HttpError = error{
     MethodNotAllowed,
     BadRequest,
     UriTooLong,
@@ -50,10 +50,10 @@ const HttpError = error{
 };
 
 // for simplicity terminate on any errors
-const Parser = struct {
+pub const Parser = struct {
     const Self = @This();
 
-    const Result = enum {
+    pub const Result = enum {
         NeedMore,
         Complete,
         Error,
@@ -65,6 +65,17 @@ const Parser = struct {
     idx: usize = 0,
 
     parsed_host: bool = false,
+
+    pub fn consumedBytes(p: *Self) usize {
+        return p.idx;
+    }
+
+    pub fn compact(p: *Self) void {
+        p.idx = 0;
+        p.consumed = 0;
+        // p.idx -= n;
+        // p.consumed -= n;
+    }
 
     pub fn parse(p: *Self, scratch: []const u8, req: *Request) !Result {
         // does not include \r\n
@@ -130,6 +141,17 @@ const Parser = struct {
             p.consumed += line.len + 2;
         }
         return .NeedMore;
+    }
+
+    /// Returns the number of bytes consumed so far and resets the parser
+    /// for parsing the next request while preserving state across a keep-alive.
+    pub fn reset(p: *Self) usize {
+        const c = p.idx;
+        p.idx = 0;
+        p.consumed = 0;
+        p.state = .RequestLine;
+        p.parsed_host = false;
+        return c;
     }
 };
 
