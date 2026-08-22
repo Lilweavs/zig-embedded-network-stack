@@ -347,6 +347,19 @@ pub const TcpSocket = struct {
         self.pending_events.set(@intFromEnum(event));
     }
 
+    fn storeSegment(self: *Self, seg_seq: u32, segment: []const u8) bool {
+        if (seg_seq == self.rcv_nxt) {
+            const num_acked = self.rx_buffer.store(segment);
+            self.rcv_nxt +%= @as(u32, @intCast(num_acked));
+            self.rcv_wnd -= @intCast(num_acked);
+            self.wnd_update_pending = true;
+            self.pushEvent(.data_received);
+            return true;
+        }
+        self.wnd_update_pending = true;
+        return false;
+    }
+
     pub fn receive(self: *Self, payload: []const u8) void {
         const header: TcpHeader = std.mem.bytesToValue(TcpHeader, payload[0..@sizeOf(TcpHeader)]);
 
@@ -412,6 +425,10 @@ pub const TcpSocket = struct {
                         self.snd_wl2 = seg_ack;
                         self.state = .ESTABLISHED;
                         self.pushEvent(.connected);
+                        if (segment.len > 0) {
+                            logger.debug("TCP: bytes received piggyback {d}\n", .{segment.len});
+                            _ = self.storeSegment(seg_seq, segment);
+                        }
                     }
                 }
             },
@@ -442,17 +459,7 @@ pub const TcpSocket = struct {
                 }
                 if (header.flags.urg == 1) {}
                 if (segment.len > 0) {
-                    if (seg_seq == self.rcv_nxt) {
-                        logger.debug("TCP: bytes received {d}\n", .{segment.len});
-                        const num_acked = self.rx_buffer.store(segment);
-                        self.rcv_nxt +%= @as(u32, @intCast(num_acked));
-                        self.rcv_wnd -= @intCast(num_acked);
-                        self.wnd_update_pending = true;
-                        self.pushEvent(.data_received);
-                    } else {
-                        logger.debug("TCP: dropping segment seq={d} expected={d}\n", .{ seg_seq, self.rcv_nxt });
-                        self.wnd_update_pending = true;
-                    }
+                    _ = self.storeSegment(seg_seq, segment);
                 }
                 if (segment.len == 0 and seqLessThan(seg_seq, self.rcv_nxt)) {
                     self.sendAck();
