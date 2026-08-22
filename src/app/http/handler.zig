@@ -5,33 +5,22 @@ const parser_mod = @import("parser.zig");
 const Parser = parser_mod.Parser;
 const Request = parser_mod.Request;
 const Connection = parser_mod.Connection;
+const HttpError = parser_mod.HttpError;
 
 const logger = std.log.scoped(.http);
 
-var packet: [25]u8 = undefined;
+pub const Response = struct {
+    status: ?HttpError = null,
+    content_type: []const u8 = "text/html",
+    body: []const u8 = &.{},
 
-const GrillmonBinary = extern struct {
-    protocol_version: u8 align(1) = 0,
-    flags: u8 align(1) = 0,
-    time_start: u32 align(1) = 0,
-    temperatures: [4]i16 align(1),
-    grill_set_point: i16 align(1) = 0,
-    battery: u8 align(1) = 0,
-    rssi: i16 align(1) = 0,
-    battery_voltage: u16 align(1) = 0,
-    uptime: u32 align(1) = 0,
+    read_fn: ?*const fn () void = null,
+    read_ctx: ?*anyopaque = null,
+
+    content_length: usize = 0,
 };
 
-// * Offset  Size  Type      Field
-// * 0       1     u8        protocol version
-// * 1       1     u8        flags
-// * 2       4     u32       cook start time, Unix seconds
-// * 6       8     i16[4]    temperatures, °F × 10
-// * 14      2     i16       grill setpoint, °F × 10
-// * 16      1     u8        battery percentage
-// * 17      2     i16       Wi-Fi RSSI, dBm
-// * 19      2     u16       battery voltage, mV
-// * 21      4     u32       uptime, seconds
+pub const RequestHandler = *const fn (req: *const Request, resp: *Response, ctx: ?*anyopaque) void;
 
 pub const ConnectionHandler = struct {
     const Self = @This();
@@ -41,6 +30,7 @@ pub const ConnectionHandler = struct {
 
     parser: Parser = .{},
     request: Request = .{ .method = .GET },
+    response: Response = .{},
 
     recv_buf: [256]u8 = undefined,
     recv_len: usize = 0,
@@ -51,11 +41,16 @@ pub const ConnectionHandler = struct {
     file_offset: usize = 0,
     file_size: usize = 0,
 
-    pub fn init(h: *Self, sock: *tcp.TcpSocket) void {
+    request_handler: ?RequestHandler = null,
+    request_ctx: ?*anyopaque = null,
+
+    pub fn init(h: *Self, sock: *tcp.TcpSocket, handler: RequestHandler, ctx: ?*anyopaque) void {
         h.* = .{
             .active = true,
             .socket = sock,
             .parser = .{},
+            .request_handler = handler,
+            .request_ctx = ctx,
         };
         h.socket.setCallback(processHttpData, h);
     }
@@ -99,33 +94,10 @@ pub const ConnectionHandler = struct {
                                 h.recv_len -= consumed;
                             }
 
-                            const target = h.request.target[0..h.request.target_len];
-                            if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/")) {
-                                h.serveFile(index_html);
-                            } else if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/api/status")) {
-                                const status = GrillmonBinary{
-                                    .battery = 80,
-                                    .grill_set_point = 225,
-                                    .temperatures = .{ 100, 1000, 250, 300 },
-                                    .rssi = -50,
-                                    .time_start = 3600,
-                                };
-                                @memcpy(packet[0..], std.mem.asBytes(&status));
-                                h.serveFile(&packet);
-                                // * Offset  Size  Type      Field
-                                // * 0       1     u8        protocol version
-                                // * 1       1     u8        flags
-                                // * 2       4     u32       cook start time, Unix seconds
-                                // * 6       8     i16[4]    temperatures, °F × 10
-                                // * 14      2     i16       grill setpoint, °F × 10
-                                // * 16      1     u8        battery percentage
-                                // * 17      2     i16       Wi-Fi RSSI, dBm
-                                // * 19      2     u16       battery voltage, mV
-                                // * 21      4     u32       uptime, seconds
+                            h.response = .{};
+                            if (h.request_handler) |handler| handler(&h.request, &h.response, h.request_ctx);
 
-                            } else {
-                                h.sendHttpError(.NotFound);
-                            }
+                            h.sendResponse(&h.response);
                             return;
                         },
                         .Error => h.sendHttpError(.InternalServerError),
@@ -142,24 +114,22 @@ pub const ConnectionHandler = struct {
         }
     }
 
-    fn serveFile(h: *Self, file: []const u8) void {
-        h.file = file;
-        h.file_offset = 0;
-        h.file_size = file.len;
+    fn sendResponse(h: *Self, r: *Response) void {
+        if (r.status) |err| return h.sendHttpError(err);
 
         var length: usize = 0;
         var b = std.fmt.bufPrint(h.tx_buf[length..], "HTTP/1.1 200 OK\r\n", .{}) catch unreachable;
         length += b.len;
         b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Type: text/html\r\n", .{}) catch unreachable;
         length += b.len;
-        b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Length: {d}\r\n", .{file.len}) catch unreachable;
+        b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Length: {d}\r\n", .{r.content_length}) catch unreachable;
         length += b.len;
         b = std.fmt.bufPrint(h.tx_buf[length..], "\r\n", .{}) catch unreachable;
         length += b.len;
 
         const remaining = h.tx_buf.len - length;
-        const num_packing = @min(remaining, file.len);
-        @memcpy(h.tx_buf[length..][0..num_packing], file[0..num_packing]);
+        const num_packing = @min(remaining, r.content_length);
+        @memcpy(h.tx_buf[length..][0..num_packing], r.body[0..num_packing]);
         length += num_packing;
 
         _ = h.socket.send(h.tx_buf[0..length]);
@@ -190,6 +160,3 @@ pub const ConnectionHandler = struct {
         h.active = false;
     }
 };
-
-// const index_html = @embedFile("aurora_dashboard_demo.html");
-const index_html = @embedFile("grillmon.html");
