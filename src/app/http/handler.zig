@@ -5,7 +5,32 @@ const parser_mod = @import("parser.zig");
 const Parser = parser_mod.Parser;
 const Request = parser_mod.Request;
 
-const logger = std.log.scoped(.http_handler);
+const logger = std.log.scoped(.http);
+
+var packet: [25]u8 = undefined;
+
+const GrillmonBinary = extern struct {
+    protocol_version: u8 align(1) = 0,
+    flags: u8 align(1) = 0,
+    time_start: u32 align(1) = 0,
+    temperatures: [4]i16 align(1),
+    grill_set_point: i16 align(1) = 0,
+    battery: u8 align(1) = 0,
+    rssi: i16 align(1) = 0,
+    battery_voltage: u16 align(1) = 0,
+    uptime: u32 align(1) = 0,
+};
+
+// * Offset  Size  Type      Field
+// * 0       1     u8        protocol version
+// * 1       1     u8        flags
+// * 2       4     u32       cook start time, Unix seconds
+// * 6       8     i16[4]    temperatures, °F × 10
+// * 14      2     i16       grill setpoint, °F × 10
+// * 16      1     u8        battery percentage
+// * 17      2     i16       Wi-Fi RSSI, dBm
+// * 19      2     u16       battery voltage, mV
+// * 21      4     u32       uptime, seconds
 
 pub const ConnectionHandler = struct {
     const Self = @This();
@@ -27,6 +52,7 @@ pub const ConnectionHandler = struct {
         h.* = .{
             .active = true,
             .socket = sock,
+            .parser = .{},
         };
         h.socket.setCallback(processHttpData, h);
     }
@@ -36,6 +62,7 @@ pub const ConnectionHandler = struct {
         switch (event) {
             .connected => {},
             .data_received => {
+                logger.debug("HTTP: Data recved -> {d}", .{sock.sport});
                 while (true) {
                     const n = sock.recv(h.recv_buf[h.recv_len..]);
                     if (n == 0) break;
@@ -62,9 +89,31 @@ pub const ConnectionHandler = struct {
                             }
                         },
                         .Complete => {
+                            logger.debug("HTTP: Request Complete -> {d}", .{sock.sport});
                             const target = h.request.target[0..h.request.target_len];
                             if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/")) {
                                 h.serveFile(index_html);
+                            } else if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/api/status")) {
+                                const status = GrillmonBinary{
+                                    .battery = 80,
+                                    .grill_set_point = 225,
+                                    .temperatures = .{ 100, 1000, 250, 300 },
+                                    .rssi = -50,
+                                    .time_start = 3600,
+                                };
+                                @memcpy(packet[0..], std.mem.asBytes(&status));
+                                h.serveFile(&packet);
+                                // * Offset  Size  Type      Field
+                                // * 0       1     u8        protocol version
+                                // * 1       1     u8        flags
+                                // * 2       4     u32       cook start time, Unix seconds
+                                // * 6       8     i16[4]    temperatures, °F × 10
+                                // * 14      2     i16       grill setpoint, °F × 10
+                                // * 16      1     u8        battery percentage
+                                // * 17      2     i16       Wi-Fi RSSI, dBm
+                                // * 19      2     u16       battery voltage, mV
+                                // * 21      4     u32       uptime, seconds
+
                             } else {
                                 h.sendError(404, "Not Found");
                             }
@@ -114,6 +163,7 @@ pub const ConnectionHandler = struct {
             const remaining = h.file[h.file_offset..];
             const sent = h.socket.send(remaining);
             h.file_offset += sent;
+            logger.debug("HTTP: chunk {d},{d} -> {d}", .{ h.file_offset, h.file_size, h.socket.sport });
         }
         if (h.file_offset >= h.file_size) {
             h.active = false;
@@ -135,4 +185,5 @@ pub const ConnectionHandler = struct {
     }
 };
 
-const index_html = @embedFile("aurora_dashboard_demo.html");
+// const index_html = @embedFile("aurora_dashboard_demo.html");
+const index_html = @embedFile("grillmon.html");
