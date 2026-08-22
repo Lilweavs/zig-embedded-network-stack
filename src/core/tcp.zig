@@ -724,8 +724,9 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
     }
 }
 
+// TODO: probably should do RFC6528
 pub fn generateInitialSequenceNumber() u32 {
-    return 100;
+    return time.millis() *% 0xDEADBEEF;
 }
 
 test "checksum" {
