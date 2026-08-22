@@ -342,7 +342,9 @@ pub const TcpSocket = struct {
         event_queue.appendBounded(.{ .sock = self, .event = event }) catch {
             // @panic(); // TODO: Think about a proper way to handle this
             logger.debug("TCP: event queue full\n", .{});
+            return;
         };
+        self.pending_events.set(@intFromEnum(event));
     }
 
     pub fn receive(self: *Self, payload: []const u8) void {
