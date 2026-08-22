@@ -292,7 +292,7 @@ pub const TcpSocket = struct {
 
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
         _ = self.tx_buffer.peek(0, frame.buffer[sidx..][0..to_send]);
-        self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, to_send);
+        self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, to_send, true);
     }
 
     fn sendSegment(self: *Self, data: []const u8) void {
@@ -301,14 +301,14 @@ pub const TcpSocket = struct {
 
         const sidx = types.TRANSPORT_HEADER_OFFSET + @sizeOf(TcpHeader);
         @memcpy(frame.buffer[sidx..][0..data.len], data);
-        self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, data.len);
+        self.sendFrame(iface, frame, .{ .ack = 1, .psh = 1 }, data.len, false);
     }
 
-    fn sendFrame(self: *Self, iface: *types.Interface, frame: *types.Frame, flags: TcpFlags, payload_len: usize) void {
+    fn sendFrame(self: *Self, iface: *types.Interface, frame: *types.Frame, flags: TcpFlags, payload_len: usize, retransmit: bool) void {
         var header = TcpHeader{
             .sport = std.mem.nativeToBig(u16, self.port),
             .dport = std.mem.nativeToBig(u16, self.sport),
-            .seq_number = std.mem.nativeToBig(u32, self.snd_nxt),
+            .seq_number = std.mem.nativeToBig(u32, if (retransmit) self.snd_una else self.snd_nxt),
             .ack_number = std.mem.nativeToBig(u32, self.rcv_nxt),
             .data_offset = 0x50,
             .flags = flags,
@@ -325,10 +325,12 @@ pub const TcpSocket = struct {
         const checksum = ipv4.calcPseudoChecksum(frame.buffer[sidx..end], .TCP, iface.ip_addr, self.daddr);
         @memcpy(frame.buffer[sidx + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
-        self.rto_timer = time.millis();
         ipv4.send(iface, self.daddr, frame, .TCP);
-        self.snd_nxt +%= @as(u32, @intCast(payload_len)) + @as(u32, flags.syn) + @as(u32, flags.fin);
-        self.wnd_update_pending = false;
+        if (!retransmit) {
+            self.rto_timer = time.millis();
+            self.snd_nxt +%= @as(u32, @intCast(payload_len)) + @as(u32, flags.syn) + @as(u32, flags.fin);
+            self.wnd_update_pending = false;
+        }
     }
 
     pub fn available(self: Self) usize {
@@ -528,7 +530,7 @@ pub const TcpSocket = struct {
             @memcpy(frame.buffer[sidx + @sizeOf(TcpHeader) ..][0..payload.len], payload);
         }
 
-        self.sendFrame(iface, frame, flags, payload.len);
+        self.sendFrame(iface, frame, flags, payload.len, false);
     }
 
     pub fn sendAck(self: *Self) void {
