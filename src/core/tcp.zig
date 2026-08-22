@@ -155,6 +155,8 @@ const OptionIterator = struct {
 };
 
 const tcp_pool_size: usize = 4;
+const INITIAL_RTO_MS: u32 = 1000;
+const MAX_SYN_ACK_RETRIES: u32 = 5;
 
 pub const TcpSocket = struct {
     iface: ?*types.Interface = null,
@@ -179,6 +181,7 @@ pub const TcpSocket = struct {
     pending_events: std.StaticBitSet(8) = .initEmpty(),
 
     rto_timer: u32 = 0,
+    rto_count: u32 = 0,
 
     snd_una: u32 = 0,
     snd_nxt: u32 = 0,
@@ -261,8 +264,23 @@ pub const TcpSocket = struct {
         const iface = self.iface orelse return;
 
         const now = time.millis();
-        if ((now - self.rto_timer) < (1 * std.time.ms_per_s)) return; // RTO not over
+        const rto = INITIAL_RTO_MS * (@as(u32, 1) << @intCast(self.rto_count));
+        if ((now -% self.rto_timer) < rto) return;
         self.rto_timer = now;
+        self.rto_count +|= 1;
+
+        if (self.state == .SYN_RECEIVED) {
+            if (self.rto_count > MAX_SYN_ACK_RETRIES) {
+                logger.debug("TCP: SYN-ACK retries exhausted sport={d}\n", .{self.sport});
+                self.state = .CLOSED;
+                self.pushEvent(.err);
+                recycle_queue.appendAssumeCapacity(self);
+                return;
+            }
+            self.sendSynAck();
+            return;
+        }
+
         const unsent = self.bytesNotAcked();
         if (unsent == 0) return;
 
@@ -411,6 +429,7 @@ pub const TcpSocket = struct {
                         self.tx_buffer.consume(bytes_acked);
                         self.snd_una = seg_ack;
                         self.rto_timer = time.millis();
+                        self.rto_count = 0;
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
                             self.pushEvent(.tx_available);
@@ -449,6 +468,7 @@ pub const TcpSocket = struct {
                         const bytes_acked = seg_ack -% self.snd_una;
                         self.tx_buffer.consume(bytes_acked);
                         self.snd_una = seg_ack;
+                        self.rto_count = 0;
                         if (self.tx_backlogged and self.tx_buffer.availableSpace() >= self.peer_mss) {
                             self.tx_backlogged = false;
                             self.pushEvent(.tx_available);
@@ -547,6 +567,7 @@ pub const TcpSocket = struct {
             @memcpy(frame.buffer[pos + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
 
             ipv4.send(iface, self.daddr, frame, .TCP);
+            self.rto_timer = time.millis();
         }
     }
 };
