@@ -42,11 +42,31 @@ const HeaderOptions = enum {
     Unknown,
 };
 
-pub const HttpError = error{
+pub const ParseError = error{
     MethodNotAllowed,
     BadRequest,
     UriTooLong,
     HttpVersionNotSupported,
+};
+
+pub const HttpError = enum(u16) {
+    BadRequest = 400,
+    NotFound = 404,
+    MethodNotAllowed = 405,
+    UriTooLong = 414,
+    InternalServerError = 500,
+    HttpVersionNotSupported = 505,
+
+    pub fn reason(self: HttpError) []const u8 {
+        return switch (self) {
+            .BadRequest => "Bad Request",
+            .NotFound => "Not Found",
+            .MethodNotAllowed => "Method Not Allowed",
+            .UriTooLong => "URI Too Long",
+            .InternalServerError => "Internal Server Error",
+            .HttpVersionNotSupported => "HTTP Version Not Supported",
+        };
+    }
 };
 
 // for simplicity terminate on any errors

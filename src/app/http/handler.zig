@@ -72,13 +72,13 @@ pub const ConnectionHandler = struct {
                     h.recv_len += n;
 
                     const result = h.parser.parse(h.recv_buf[0..h.recv_len], &h.request) catch |err| {
-                        const code: u16, const reason: []const u8 = switch (err) {
-                            error.MethodNotAllowed => .{ 405, "Method Not Allowed" },
-                            error.BadRequest => .{ 400, "Bad Request" },
-                            error.UriTooLong => .{ 414, "URI Too Long" },
-                            error.HttpVersionNotSupported => .{ 505, "HTTP Version Not Supported" },
+                        const e: parser_mod.HttpError = switch (err) {
+                            error.MethodNotAllowed => .MethodNotAllowed,
+                            error.BadRequest => .BadRequest,
+                            error.UriTooLong => .UriTooLong,
+                            error.HttpVersionNotSupported => .HttpVersionNotSupported,
                         };
-                        h.sendError(code, reason);
+                        h.sendHttpError(e);
                         return;
                     };
 
@@ -124,11 +124,11 @@ pub const ConnectionHandler = struct {
                                 // * 21      4     u32       uptime, seconds
 
                             } else {
-                                h.sendError(404, "Not Found");
+                                h.sendHttpError(.NotFound);
                             }
                             return;
                         },
-                        .Error => return h.sendError(500, "Internal Server Error"),
+                        .Error => h.sendHttpError(.InternalServerError),
                     }
                 }
             },
@@ -182,16 +182,10 @@ pub const ConnectionHandler = struct {
         }
     }
 
-    fn sendError(h: *Self, code: u16, reason: []const u8) void {
-        var length: usize = 0;
-        var b = std.fmt.bufPrint(h.tx_buf[length..], "HTTP/1.1 {d} ", .{code}) catch unreachable;
-        length += b.len;
-        @memcpy(h.tx_buf[length..][0..reason.len], reason);
-        length += reason.len;
-        b = std.fmt.bufPrint(h.tx_buf[length..], "\r\nContent-Length: 0\r\n\r\n", .{}) catch unreachable;
-        length += b.len;
+    fn sendHttpError(h: *Self, e: parser_mod.HttpError) void {
+        const buf = std.fmt.bufPrint(&h.tx_buf, "HTTP/1.1 {d} {s}\r\n\r\n", .{ @intFromEnum(e), e.reason() }) catch unreachable;
 
-        _ = h.socket.send(h.tx_buf[0..length]);
+        _ = h.socket.send(buf);
         h.socket.close();
         h.active = false;
     }
