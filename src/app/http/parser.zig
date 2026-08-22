@@ -81,7 +81,11 @@ pub const Parser = struct {
         // does not include \r\n
         while (std.mem.findPosLinear(u8, scratch, p.idx, "\r\n")) |idx| {
             const line = scratch[p.idx..idx];
-            if (p.consumed > 0 and line.len == 0) return .Complete;
+            if (p.consumed > 0 and line.len == 0) {
+                p.idx += line.len + 2; // jump past the new-line
+                p.consumed += line.len + 2;
+                return .Complete;
+            }
             switch (p.state) {
                 .RequestLine => {
                     var iter = std.mem.tokenizeScalar(u8, line, ' ');
