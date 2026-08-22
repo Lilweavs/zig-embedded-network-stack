@@ -90,6 +90,12 @@ pub const ConnectionHandler = struct {
                         },
                         .Complete => {
                             logger.debug("HTTP: Request Complete -> {d}", .{sock.sport});
+                            const consumed = h.parser.reset();
+                            if (consumed > 0) {
+                                std.mem.copyForwards(u8, h.recv_buf[0 .. h.recv_len - consumed], h.recv_buf[consumed..h.recv_len]);
+                                h.recv_len -= consumed;
+                            }
+
                             const target = h.request.target[0..h.request.target_len];
                             if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/")) {
                                 h.serveFile(index_html);
