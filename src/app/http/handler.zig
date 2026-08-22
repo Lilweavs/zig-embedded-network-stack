@@ -36,41 +36,42 @@ pub const ConnectionHandler = struct {
         switch (event) {
             .connected => {},
             .data_received => {
-                const n = sock.recv(h.recv_buf[h.recv_len..]);
-                if (n == 0) return;
-                h.recv_len += n;
+                while (true) {
+                    const n = sock.recv(h.recv_buf[h.recv_len..]);
+                    if (n == 0) break;
+                    h.recv_len += n;
 
-                const result = h.parser.parse(h.recv_buf[0..h.recv_len], &h.request) catch |err| {
-                    const code: u16, const reason: []const u8 = switch (err) {
-                        error.MethodNotAllowed => .{ 405, "Method Not Allowed" },
-                        error.BadRequest => .{ 400, "Bad Request" },
-                        error.UriTooLong => .{ 414, "URI Too Long" },
-                        error.HttpVersionNotSupported => .{ 505, "HTTP Version Not Supported" },
+                    const result = h.parser.parse(h.recv_buf[0..h.recv_len], &h.request) catch |err| {
+                        const code: u16, const reason: []const u8 = switch (err) {
+                            error.MethodNotAllowed => .{ 405, "Method Not Allowed" },
+                            error.BadRequest => .{ 400, "Bad Request" },
+                            error.UriTooLong => .{ 414, "URI Too Long" },
+                            error.HttpVersionNotSupported => .{ 505, "HTTP Version Not Supported" },
+                        };
+                        h.sendError(code, reason);
+                        return;
                     };
-                    h.sendError(code, reason);
-                    return;
-                };
 
-                switch (result) {
-                    .NeedMore => {
-                        const consumed = h.parser.consumedBytes();
-                        if (consumed > 0) {
-                            std.mem.copyForwards(u8, h.recv_buf[0 .. h.recv_len - consumed], h.recv_buf[consumed..h.recv_len]);
-                            h.recv_len -= consumed;
-                            h.parser.compact();
-                        }
-                    },
-                    .Complete => {
-                        const target = h.request.target[0..h.request.target_len];
-                        if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/")) {
-                            h.serveFile(index_html);
-                        } else {
-                            h.sendError(404, "Not Found");
-                        }
-                    },
-                    .Error => {
-                        h.sendError(500, "Internal Server Error");
-                    },
+                    switch (result) {
+                        .NeedMore => {
+                            const consumed = h.parser.consumedBytes();
+                            if (consumed > 0) {
+                                std.mem.copyForwards(u8, h.recv_buf[0 .. h.recv_len - consumed], h.recv_buf[consumed..h.recv_len]);
+                                h.recv_len -= consumed;
+                                h.parser.compact();
+                            }
+                        },
+                        .Complete => {
+                            const target = h.request.target[0..h.request.target_len];
+                            if (h.request.method == .GET and std.ascii.eqlIgnoreCase(target, "/")) {
+                                h.serveFile(index_html);
+                            } else {
+                                h.sendError(404, "Not Found");
+                            }
+                            return;
+                        },
+                        .Error => return h.sendError(500, "Internal Server Error"),
+                    }
                 }
             },
             .tx_available => {
