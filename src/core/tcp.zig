@@ -132,17 +132,23 @@ const OptionIterator = struct {
     index: usize = 0,
 
     pub fn next(self: *Self) ?OptionPayload {
-        const code = @as(TcpOptions, @enumFromInt(self.buffer[self.index]));
-
-        while (self.index > self.buffer.len) {
-            if (code == .End) break;
-            if (code == .Nop) {
-                self.index += 1;
+        while (self.index < self.buffer.len) {
+            const code = @as(TcpOptions, @enumFromInt(self.buffer[self.index]));
+            switch (code) {
+                .End => break,
+                .Nop => {
+                    self.index += 1;
+                    continue;
+                },
+                else => {
+                    // TODO: if this happens should we just silently return or should we return an error / drop the connection??
+                    if (self.index + 1 >= self.buffer.len) break;
+                    const length = self.buffer[self.index + 1];
+                    self.index += 2 + length;
+                    if (self.index > self.buffer.len) break;
+                    return .{ .code = code, .payload = self.buffer[self.index - length .. self.index] };
+                },
             }
-            const length = self.buffer[self.index + 1];
-            self.index += 2 + length;
-
-            return .{ .code = code, .payload = self.buffer[self.index - length .. self.index] };
         }
         return null;
     }
