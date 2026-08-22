@@ -286,7 +286,7 @@ pub const TcpSocket = struct {
 
         const frame = iface.requestFrame() orelse return;
 
-        const to_send = @min(unsent, @as(usize, self.peer_mss));
+        const to_send = @min(unsent, @min(self.snd_wnd, self.peer_mss));
 
         logger.debug("RTO: {d}\n", .{to_send});
 
