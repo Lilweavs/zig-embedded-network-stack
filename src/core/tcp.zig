@@ -225,6 +225,19 @@ pub const TcpSocket = struct {
         }
     }
 
+    pub fn abort(self: *Self) void {
+        switch (self.state) {
+            .SYN_RECEIVED, .ESTABLISHED, .CLOSE_WAIT, .FIN_WAIT_1, .FIN_WAIT_2, .LAST_ACK => {
+                self.sendInternal(.{ .rst = 1 }, &.{});
+            },
+            else => {},
+        }
+        if (self.state != .CLOSED) {
+            self.state = .CLOSED;
+            recycle_queue.appendAssumeCapacity(self);
+        }
+    }
+
     pub fn clearCallback(self: *Self) void {
         self.callback = null;
         self.cb_context = null;
@@ -272,9 +285,8 @@ pub const TcpSocket = struct {
         if (self.state == .SYN_RECEIVED) {
             if (self.rto_count > MAX_SYN_ACK_RETRIES) {
                 logger.debug("TCP: SYN-ACK retries exhausted sport={d}\n", .{self.sport});
-                self.state = .CLOSED;
                 self.pushEvent(.err);
-                recycle_queue.appendAssumeCapacity(self);
+                self.abort();
                 return;
             }
             self.sendSynAck();
@@ -682,6 +694,30 @@ pub fn dispatchAccept() void {
     accept_queue.clearRetainingCapacity();
 }
 
+fn sendReset(iface: *types.Interface, remote_addr: u32, local_port: u16, remote_port: u16, ack: u32) void {
+    const frame = iface.requestFrame() orelse return;
+
+    var header = TcpHeader{
+        .sport = std.mem.nativeToBig(u16, local_port),
+        .dport = std.mem.nativeToBig(u16, remote_port),
+        .seq_number = 0,
+        .ack_number = std.mem.nativeToBig(u32, ack),
+        .data_offset = 0x50,
+        .flags = .{ .rst = 1, .ack = 1 },
+        .window = 0,
+    };
+
+    const pos: usize = types.TRANSPORT_HEADER_OFFSET;
+    const end: usize = pos + @sizeOf(TcpHeader);
+    @memcpy(frame.buffer[pos..end], std.mem.asBytes(&header));
+    frame.len = end - pos;
+
+    const checksum = ipv4.calcPseudoChecksum(frame.buffer[pos..end], .TCP, iface.ip_addr, remote_addr);
+    @memcpy(frame.buffer[pos + @offsetOf(TcpHeader, "checksum") ..][0..2], std.mem.asBytes(&checksum));
+
+    ipv4.send(iface, remote_addr, frame, .TCP);
+}
+
 pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
     if (buffer.len < @sizeOf(TcpHeader)) return;
 
@@ -701,6 +737,7 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
             if (!server.active or server.port != dport) continue;
 
             if (server.connection_count >= server.max_connections) {
+                sendReset(iface, saddr, dport, sport, std.mem.nativeToBig(u32, header.seq_number) +% 1);
                 return;
             }
 
@@ -751,8 +788,7 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
         if (prev_state == .SYN_RECEIVED and sock.state == .ESTABLISHED) {
             accept_queue.appendBounded(sock) catch {
                 logger.debug("TCP: accept queue full, refusing connection on port {d}\n", .{dport});
-                sock.sendInternal(.{ .rst = 1 }, &.{});
-                sock.state = .CLOSED;
+                sock.abort();
             };
         }
 

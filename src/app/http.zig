@@ -76,5 +76,5 @@ fn accept(sock: *tcp.TcpSocket) void {
         }
     }
     logger.warn("max connections reached, dropping", .{});
-    sock.close();
+    sock.abort();
 }
