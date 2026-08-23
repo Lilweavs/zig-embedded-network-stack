@@ -1,4 +1,7 @@
 const std = @import("std");
+const http = @import("../http.zig");
+
+const HttpError = http.HttpError;
 
 // TODO: keep unsupported methods commented for now
 pub const Method = enum {
@@ -46,44 +49,6 @@ const HeaderOptions = enum {
     Unknown,
 };
 
-pub const ParseError = error{
-    MethodNotAllowed,
-    BadRequest,
-    UriTooLong,
-    HttpVersionNotSupported,
-};
-
-pub const HttpError = enum(u16) {
-    BadRequest = 400,
-    NotFound = 404,
-    MethodNotAllowed = 405,
-    UriTooLong = 414,
-    InternalServerError = 500,
-    HttpVersionNotSupported = 505,
-
-    pub fn reason(self: HttpError) []const u8 {
-        return switch (self) {
-            .BadRequest => "Bad Request",
-            .NotFound => "Not Found",
-            .MethodNotAllowed => "Method Not Allowed",
-            .UriTooLong => "URI Too Long",
-            .InternalServerError => "Internal Server Error",
-            .HttpVersionNotSupported => "HTTP Version Not Supported",
-        };
-    }
-};
-
-pub fn httpErrorFrom(err: anyerror) HttpError {
-    return switch (err) {
-        error.MethodNotAllowed => .MethodNotAllowed,
-        error.BadRequest => .BadRequest,
-        error.UriTooLong => .UriTooLong,
-        error.HttpVersionNotSupported => .HttpVersionNotSupported,
-        error.NotFound => .NotFound,
-        else => .InternalServerError,
-    };
-}
-
 // for simplicity terminate on any errors
 pub const Parser = struct {
     const Self = @This();
@@ -112,7 +77,7 @@ pub const Parser = struct {
         // p.consumed -= n;
     }
 
-    pub fn parse(p: *Self, scratch: []const u8, req: *Request) !Result {
+    pub fn parse(p: *Self, scratch: []const u8, req: *Request) HttpError!Result {
         // does not include \r\n
         while (std.mem.findPosLinear(u8, scratch, p.idx, "\r\n")) |idx| {
             const line = scratch[p.idx..idx];

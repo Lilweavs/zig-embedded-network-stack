@@ -7,6 +7,44 @@ pub const Request = @import("http/parser.zig").Request;
 pub const Response = handler_mod.Response;
 pub const RequestHandler = handler_mod.RequestHandler;
 
+pub const HttpError = error{
+    BadRequest,
+    NotFound,
+    MethodNotAllowed,
+    UriTooLong,
+    InternalServerError,
+    HttpVersionNotSupported,
+};
+
+pub fn code(e: HttpError) u16 {
+    return switch (e) {
+        error.BadRequest => 400,
+        error.NotFound => 404,
+        error.MethodNotAllowed => 405,
+        error.UriTooLong => 414,
+        error.InternalServerError => 500,
+        error.HttpVersionNotSupported => 505,
+    };
+}
+
+pub fn reason(e: HttpError) []const u8 {
+    return switch (e) {
+        error.BadRequest => "Bad Request",
+        error.NotFound => "Not Found",
+        error.MethodNotAllowed => "Method Not Allowed",
+        error.UriTooLong => "URI Too Long",
+        error.InternalServerError => "Internal Server Error",
+        error.HttpVersionNotSupported => "HTTP Version Not Supported",
+    };
+}
+
+pub fn httpErrorFrom(err: anyerror) HttpError {
+    return switch (err) {
+        error.BadRequest, error.NotFound, error.MethodNotAllowed, error.UriTooLong, error.HttpVersionNotSupported => |e| e,
+        else => error.InternalServerError,
+    };
+}
+
 const logger = std.log.scoped(.http);
 
 var server: *tcp.TcpServer = undefined;

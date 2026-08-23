@@ -1,15 +1,18 @@
 const std = @import("std");
 const tcp = @import("../../core/tcp.zig");
 const parser_mod = @import("parser.zig");
+const http = @import("../http.zig");
 
 const Parser = parser_mod.Parser;
 const Request = parser_mod.Request;
 const Connection = parser_mod.Connection;
-const HttpError = parser_mod.HttpError;
+const HttpError = http.HttpError;
 
 const logger = std.log.scoped(.http);
 
-const httpErrorFrom = parser_mod.httpErrorFrom;
+const code = http.code;
+const reason = http.reason;
+const httpErrorFrom = http.httpErrorFrom;
 
 pub const Response = struct {
     content_type: []const u8 = "text/html",
@@ -71,7 +74,7 @@ pub const ConnectionHandler = struct {
                     h.recv_len += n;
 
                     const result = h.parser.parse(h.recv_buf[0..h.recv_len], &h.request) catch |err| {
-                        h.sendHttpError(httpErrorFrom(err));
+                        h.sendHttpError(err);
                         return;
                     };
 
@@ -93,7 +96,7 @@ pub const ConnectionHandler = struct {
                             }
 
                             const handler = h.request_handler orelse {
-                                h.sendHttpError(.NotFound);
+                                h.sendHttpError(error.NotFound);
                                 return;
                             };
 
@@ -104,7 +107,7 @@ pub const ConnectionHandler = struct {
                             h.sendResponse(&h.response);
                             return;
                         },
-                        .Error => h.sendHttpError(.InternalServerError),
+                        .Error => h.sendHttpError(error.InternalServerError),
                     }
                 }
             },
@@ -162,7 +165,7 @@ pub const ConnectionHandler = struct {
     }
 
     fn sendHttpError(h: *Self, e: HttpError) void {
-        const buf = std.fmt.bufPrint(&h.tx_buf, "HTTP/1.1 {d} {s}\r\n\r\n", .{ @intFromEnum(e), e.reason() }) catch unreachable;
+        const buf = std.fmt.bufPrint(&h.tx_buf, "HTTP/1.1 {d} {s}\r\n\r\n", .{ code(e), reason(e) }) catch unreachable;
 
         _ = h.socket.send(buf);
         h.socket.close();
