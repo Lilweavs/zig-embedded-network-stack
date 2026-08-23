@@ -25,6 +25,10 @@ pub const Request = struct {
     target_len: u8 = 0,
     connection: Connection = .KeepAlive,
     content_length: usize = 0,
+
+    pub fn path(req: *const Request) []const u8 {
+        return req.target[0..req.target_len];
+    }
 };
 
 const State = enum {
