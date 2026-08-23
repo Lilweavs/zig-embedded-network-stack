@@ -73,6 +73,17 @@ pub const HttpError = enum(u16) {
     }
 };
 
+pub fn httpErrorFrom(err: anyerror) HttpError {
+    return switch (err) {
+        error.MethodNotAllowed => .MethodNotAllowed,
+        error.BadRequest => .BadRequest,
+        error.UriTooLong => .UriTooLong,
+        error.HttpVersionNotSupported => .HttpVersionNotSupported,
+        error.NotFound => .NotFound,
+        else => .InternalServerError,
+    };
+}
+
 // for simplicity terminate on any errors
 pub const Parser = struct {
     const Self = @This();

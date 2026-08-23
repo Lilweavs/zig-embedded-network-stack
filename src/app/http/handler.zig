@@ -9,18 +9,21 @@ const HttpError = parser_mod.HttpError;
 
 const logger = std.log.scoped(.http);
 
+const httpErrorFrom = parser_mod.httpErrorFrom;
+
 pub const Response = struct {
-    status: ?HttpError = null,
     content_type: []const u8 = "text/html",
     body: []const u8 = &.{},
 
     read_fn: ?*const fn () void = null,
     read_ctx: ?*anyopaque = null,
 
+    offset: usize = 0,
+    bytes_sent: usize = 0,
     content_length: usize = 0,
 };
 
-pub const RequestHandler = *const fn (req: *const Request, resp: *Response, ctx: ?*anyopaque) void;
+pub const RequestHandler = *const fn (req: *const Request, ctx: ?*anyopaque) anyerror!Response;
 
 pub const ConnectionHandler = struct {
     const Self = @This();
@@ -49,6 +52,7 @@ pub const ConnectionHandler = struct {
             .active = true,
             .socket = sock,
             .parser = .{},
+            .response = .{},
             .request_handler = handler,
             .request_ctx = ctx,
         };
@@ -67,13 +71,7 @@ pub const ConnectionHandler = struct {
                     h.recv_len += n;
 
                     const result = h.parser.parse(h.recv_buf[0..h.recv_len], &h.request) catch |err| {
-                        const e: parser_mod.HttpError = switch (err) {
-                            error.MethodNotAllowed => .MethodNotAllowed,
-                            error.BadRequest => .BadRequest,
-                            error.UriTooLong => .UriTooLong,
-                            error.HttpVersionNotSupported => .HttpVersionNotSupported,
-                        };
-                        h.sendHttpError(e);
+                        h.sendHttpError(httpErrorFrom(err));
                         return;
                     };
 
@@ -94,9 +92,15 @@ pub const ConnectionHandler = struct {
                                 h.recv_len -= consumed;
                             }
 
-                            h.response = .{};
-                            if (h.request_handler) |handler| handler(&h.request, &h.response, h.request_ctx);
+                            const handler = h.request_handler orelse {
+                                h.sendHttpError(.NotFound);
+                                return;
+                            };
 
+                            h.response = handler(&h.request, h.request_ctx) catch |err| {
+                                h.sendHttpError(httpErrorFrom(err));
+                                return;
+                            };
                             h.sendResponse(&h.response);
                             return;
                         },
@@ -105,6 +109,7 @@ pub const ConnectionHandler = struct {
                 }
             },
             .tx_available => {
+                // TODO: check if we have an actual response. Maybe response should be a ?Response
                 h.sendFileChunks(h.request.connection);
             },
             .closed, .err => {
@@ -114,45 +119,49 @@ pub const ConnectionHandler = struct {
         }
     }
 
-    fn sendResponse(h: *Self, r: *Response) void {
-        if (r.status) |err| return h.sendHttpError(err);
-
+    fn sendResponse(h: *Self, res: *Response) void {
         var length: usize = 0;
         var b = std.fmt.bufPrint(h.tx_buf[length..], "HTTP/1.1 200 OK\r\n", .{}) catch unreachable;
         length += b.len;
-        b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Type: text/html\r\n", .{}) catch unreachable;
+        b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Type: {s}\r\n", .{res.content_type}) catch unreachable;
         length += b.len;
-        b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Length: {d}\r\n", .{r.content_length}) catch unreachable;
+        b = std.fmt.bufPrint(h.tx_buf[length..], "Content-Length: {d}\r\n", .{res.content_length}) catch unreachable;
         length += b.len;
         b = std.fmt.bufPrint(h.tx_buf[length..], "\r\n", .{}) catch unreachable;
         length += b.len;
 
         const remaining = h.tx_buf.len - length;
-        const num_packing = @min(remaining, r.content_length);
-        @memcpy(h.tx_buf[length..][0..num_packing], r.body[0..num_packing]);
+        const num_packing = @min(remaining, res.body.len);
+        @memcpy(h.tx_buf[length..][0..num_packing], res.body[0..num_packing]);
         length += num_packing;
 
         _ = h.socket.send(h.tx_buf[0..length]);
-        h.file_offset = num_packing;
+        h.response.offset += num_packing;
+        h.response.bytes_sent += num_packing;
         h.sendFileChunks(h.request.connection);
     }
 
     fn sendFileChunks(h: *Self, connection: Connection) void {
-        if (h.file_offset < h.file_size) {
-            const remaining = h.file[h.file_offset..];
+        if (h.response.bytes_sent < h.response.content_length) {
+            const remaining = h.response.body[h.response.offset..];
             const sent = h.socket.send(remaining);
-            h.file_offset += sent;
-            logger.debug("HTTP: chunk {d},{d} -> {d}", .{ h.file_offset, h.file_size, h.socket.sport });
+            h.response.offset += sent;
+            h.response.bytes_sent += sent;
+            logger.debug("HTTP: chunk {d},{d} -> {d}", .{ h.response.offset, h.response.content_length, h.socket.sport });
         }
-        if (h.file_offset >= h.file_size) {
-            if (connection == .Close) {
-                h.socket.close();
-                h.active = false;
+        if (h.response.offset >= h.response.body.len) {
+            if (h.response.bytes_sent >= h.response.content_length) {
+                if (connection == .Close) {
+                    h.socket.close();
+                    h.active = false;
+                }
+            } else {
+                // TODO: notify user that we need more data
             }
         }
     }
 
-    fn sendHttpError(h: *Self, e: parser_mod.HttpError) void {
+    fn sendHttpError(h: *Self, e: HttpError) void {
         const buf = std.fmt.bufPrint(&h.tx_buf, "HTTP/1.1 {d} {s}\r\n\r\n", .{ @intFromEnum(e), e.reason() }) catch unreachable;
 
         _ = h.socket.send(buf);
