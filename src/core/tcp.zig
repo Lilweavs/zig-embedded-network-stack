@@ -737,7 +737,7 @@ pub fn processTCPFrame(iface: *types.Interface, saddr: u32, buffer: []u8) void {
             if (!server.active or server.port != dport) continue;
 
             if (server.connection_count >= server.max_connections) {
-                logger.debug("TCP: connection limit reached\n", .{dport});
+                logger.debug("TCP: connection limit reached\n", .{});
                 sendReset(iface, saddr, dport, sport, std.mem.nativeToBig(u32, header.seq_number) +% 1);
                 return;
             }
